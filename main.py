@@ -118,7 +118,7 @@ class MovingAverageStrategy:
 # ============================================================
 # MATCHING YOUR place_order FUNCTION
 # ============================================================
-def place_order(price, symbol, qty, side, order_type, trd_env):
+def place_order(trade_ctx, price, symbol, qty, side, order_type, trd_env):
     """Place a LIMIT/MARKET order in SIMULATE mode"""
     ret, data = trade_ctx.place_order(
         price=price,
@@ -145,6 +145,12 @@ def compute_total_return(sell_df):
 # QUOTE CALLBACK
 # ============================================================
 class KlineHandler(CurKlineHandlerBase):
+
+    def __init__(self, strategy, trade_ctx):
+        super().__init__()
+        self.strategy = strategy
+        self.trade_ctx = trade_ctx
+
     def on_recv_rsp(self, rsp_pb):
         ret, data = super().on_recv_rsp(rsp_pb)
         if ret != RET_OK:
@@ -152,24 +158,26 @@ class KlineHandler(CurKlineHandlerBase):
             return RET_ERROR, data
         
         row = data.iloc[-1]
-        if row['time_key'] == strategy.last_candle_time:
+        if row['time_key'] == self.strategy.last_candle_time:
             return RET_OK, data
     
-        strategy.last_candle_time = row['time_key']
+        self.strategy.last_candle_time = row['time_key']
+        print(f"Current time: {row['time_key']}, Current price:  {row['close']}")
 
         # Update state
-        strategy.update_state_from_row(row)
+        self.strategy.update_state_from_row(row)
         
         # Decide action
-        action = strategy.buy_or_sell()
+        action = self.strategy.buy_or_sell()
         
         # Execute action in live mode
         if action == "BUY":
-            order_data = place_order(strategy.prices[-1], SYMBOL, QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
+            order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
         elif action == "SELL":
-            order_data = place_order(strategy.prices[-1], SYMBOL, QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
-
-        strategy.save_output(row, action, order_data)
+            order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
+        else:
+            order_data = None
+        self.strategy.save_output(row, action, order_data)
             
         return RET_OK, data
 
@@ -177,6 +185,11 @@ class KlineHandler(CurKlineHandlerBase):
 # ORDER CALLBACK (LIVE MODE ONLY)
 # ============================================================
 class OrderHandler(TradeOrderHandlerBase):
+    
+    def __init__(self, strategy):
+        super().__init__()
+        self.strategy = strategy
+    
     def on_recv_rsp(self, rsp_pb):
         ret, data = super().on_recv_rsp(rsp_pb)
         if ret != RET_OK:
@@ -184,25 +197,27 @@ class OrderHandler(TradeOrderHandlerBase):
             return RET_ERROR, data
 
         if data['order_status'].iloc[0] == OrderStatus.FILLED_ALL:
-            for o in strategy.output:
+            for o in self.strategy.output:
                 if o['order_id'] == data['order_id'].iloc[0]:
                     o['execution_time'] = data['update_time'].iloc[0]
                     o['execution_price'] = data['price'].iloc[0]
 
                     if data['trd_side'].iloc[0] == TrdSide.BUY:
                         action = "BUY"
-                        strategy.position_open = True
-                        strategy.entry_price = o['execution_price']
+                        self.strategy.position_open = True
+                        self.strategy.entry_price = o['execution_price']
 
                     elif data['trd_side'].iloc[0] == TrdSide.SELL:
                         action = "SELL"
-                        strategy.position_open = False
-                        strategy.entry_price = 0
+                        self.strategy.position_open = False
+                        self.strategy.entry_price = 0
                         
                         o['pl_pct'] = (o['execution_price'] - o['entry_price']) / o['entry_price'] * 100
+                    else:
+                        action = "HOLD"
 
-                    o['position_open'] = strategy.position_open
-                    o['Position'] = "OPEN" if strategy.position_open else "CLOSED"
+                    o['position_open'] = self.strategy.position_open
+                    o['Position'] = "OPEN" if self.strategy.position_open else "CLOSED"
                     break
             print(f"{SYMBOL} | Price:{data['price'].iloc[0]:.2f} "
                     f"| Action:{action} "
@@ -219,15 +234,16 @@ def start(today_date):
     quote_ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
 
     if live_mode:
-        quote_ctx.set_handler(KlineHandler())
-        quote_ctx.subscribe([SYMBOL], [SubType.K_1M], subscribe_push=True)
         trade_ctx = OpenSecTradeContext(
             filter_trdmarket=TrdMarket.HK,
             host="127.0.0.1",
             port=11111,
             security_firm=SecurityFirm.FUTUSG
         )
-        trade_ctx.set_handler(OrderHandler())
+        trade_ctx.set_handler(OrderHandler(strategy))
+        quote_ctx.set_handler(KlineHandler(strategy, trade_ctx))
+        quote_ctx.subscribe([SYMBOL], [SubType.K_1M], subscribe_push=True)
+        
     else:
         trade_ctx = None
 
