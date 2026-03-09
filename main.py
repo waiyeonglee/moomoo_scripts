@@ -105,7 +105,7 @@ class MovingAverageStrategy:
             "prev_vmap": self.prev_vmap,
             "VMAP_up": self.vmap > self.prev_vmap,
             "action": action,
-            "order_id": order_data['order_id'] if order_data else None,
+            "order_id": order_data['order_id'] if order_data is not None else None,
             "execution_time": "NA",
             "execution_price": "NA",
             "entry_price": self.entry_price,
@@ -218,10 +218,11 @@ class OrderHandler(TradeOrderHandlerBase):
 
                     o['position_open'] = self.strategy.position_open
                     o['Position'] = "OPEN" if self.strategy.position_open else "CLOSED"
-                    break
-            print(f"{SYMBOL} | Price:{data['price'].iloc[0]:.2f} "
+                    
+                    print(f"{SYMBOL} | Price:{data['price'].iloc[0]:.2f} "
                     f"| Action:{action} "
                     f"| Time:{data['update_time'].iloc[0]}")
+                    break
 
         return RET_OK, data
          
