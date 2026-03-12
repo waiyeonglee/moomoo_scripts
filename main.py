@@ -380,7 +380,7 @@ def start(today_date):
                 elif action == 'SELL':
                     strategy.max_cash_buy += sell_qty
                     strategy.max_position_sell -= sell_qty
-                    total_price -= current_price * sell_qty
+                    total_price -= strategy.cost_price * sell_qty
                     if strategy.max_position_sell > 0:
                         strategy.cost_price = total_price / strategy.max_position_sell
                         strategy.realized_pl_pct = (current_price - strategy.cost_price) / strategy.cost_price * 100
@@ -403,18 +403,24 @@ def start(today_date):
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description='Run the trading bot in live or test mode.')
     argparser.add_argument('--live', default=False, action='store_true', help='Run the bot in live mode (default is test mode)')
+    argparser.add_argument('--date', default=pd.Timestamp.today(), help='Current date, or previous date for backtesting')
     args = argparser.parse_args()
     live_mode = args.live
+    if not live_mode:
+        today_date = pd.to_datetime(args.date + ' 23:59:00')
     
     try:
-        today_date = pd.Timestamp.today()
         strategy, quote_ctx, trade_ctx = start(today_date)
     except KeyboardInterrupt:
         print("Stopped by user.")
     finally:
         if len(strategy.output):
             output_df = pd.DataFrame(strategy.output)
-            output_path = os.path.join(os.getcwd(), 'logs', f"{pd.Timestamp.today().strftime('%Y-%m-%d %H:%M:%S')} - logs.csv")
+            if live_mode:
+                file_name = 'live_trading_logs.csv'
+            else:
+                file_name = 'simulated_trading_logs.csv'
+            output_path = os.path.join(os.getcwd(), 'logs', f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {file_name}")
             output_df.to_csv(output_path)
             quote_ctx.close()
             trade_ctx.close()
