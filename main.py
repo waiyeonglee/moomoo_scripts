@@ -11,7 +11,8 @@ SYMBOL = "HK.00700"
 # SYMBOL = "US.AAPL"
 SHORT_WINDOW = 3
 LONG_WINDOW = 15
-PROFIT_PCT = 1
+PROFIT_PCT = 0.5
+LOSS_PCT = -0.5
 trade_env = TrdEnv.SIMULATE
 
 # ============================================================
@@ -75,9 +76,13 @@ class MovingAverageStrategy:
             return "INITIALIZING", "INITIALIZING"
         
         action = "HOLD"
-
-        sell_ratio = min(0.5, unrealized_pl_pct / 2)
-        sell_qty = int(self.max_position_sell * sell_ratio)
+        
+        # sell ratio 0 < x < 1
+        sell_ratio = min(1, abs(unrealized_pl_pct) / 2)
+        if self.max_position_sell < 1:
+            sell_qty = 0
+        else:
+            sell_qty = int(self.max_position_sell * sell_ratio)
         
         buy_signal = (
             self.short_sma > self.long_sma
@@ -85,14 +90,15 @@ class MovingAverageStrategy:
             and self.max_cash_buy > 0
         )
         sell_signal = (
-            self.short_sma < self.long_sma
-            and unrealized_pl_pct >= PROFIT_PCT
+            (self.short_sma < self.long_sma
+            or unrealized_pl_pct >= PROFIT_PCT
+            or unrealized_pl_pct <= LOSS_PCT)
             and sell_qty > 0
         )
         
         if buy_signal:
             action = "BUY"
-        elif sell_signal:
+        if sell_signal:
             action = "SELL"
             
         return action, sell_qty
@@ -153,14 +159,14 @@ def get_position_status(trade_ctx, current_price):
         if SYMBOL == row['code'] and row['cost_price'] > 0:
             position_open = True
             cost_price = row['cost_price']
-            unrealized_pl_pct = (current_price - cost_price) / cost_price * 100
+            pl_pct = (current_price - cost_price) / cost_price * 100
             break
         else:
             position_open = False
-            unrealized_pl_pct = 0
+            pl_pct = 0
             cost_price = 0
 
-    return position_open, unrealized_pl_pct, cost_price
+    return position_open, pl_pct, cost_price
 
 def get_available_qty(trade_ctx, current_price, lot_size):
     ret, max_qty_to_trade = trade_ctx.acctradinginfo_query(order_type=OrderType.NORMAL, code=SYMBOL, price=current_price, trd_env=trade_env)
@@ -235,12 +241,13 @@ class KlineHandler(CurKlineHandlerBase):
         # Decide action
         action, sell_qty = self.strategy.buy_or_sell(unrealized_pl_pct)
 
-        QTY = self.lot_size * 1
+        BUY_QTY = self.lot_size * 1
+        SELL_QTY = self.lot_size * sell_qty
         # Execute action in live mode
         if action == "BUY":
-            order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
+            order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
         elif action == "SELL":
-            order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, sell_qty, TrdSide.SELL, OrderType.MARKET, trade_env)
+            order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, SELL_QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
         else:
             order_data = None
         self.strategy.save_output(row, action, order_data)
@@ -281,7 +288,7 @@ class OrderHandler(TradeOrderHandlerBase):
                     f"| Action:{action} "
                     f"| Time:{o['execution_time']}")
                     if action == 'SELL':
-                        print(f"|Cost Price:{o['cost_price']}, Sell Price:{o['execution_price']},  Profit:{o['unrealized_   pl_pct']:.2f}")
+                        print(f"|Cost Price:{o['cost_price']}, Sell Price:{o['execution_price']},  Profit:{o['unrealized_pl_pct']:.2f}")
                     break
 
         return RET_OK, data
@@ -325,7 +332,7 @@ def start(today_date):
         else:
             prev_date = (today_date - BDay(1)).strftime('%Y-%m-%d')
         end_date = prev_date
-    print(prev_date, end_date)
+    
     unrealized_pl_pct = initialize_rows(strategy, quote_ctx, prev_date, end_date, lot_size)
 
     if live_mode:    
