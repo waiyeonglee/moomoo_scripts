@@ -26,7 +26,7 @@ class MovingAverageStrategy:
         self.prices = []
         self.last_candle_time = None
         self.realized_pl_pct = 0
-        self.vmap = 0
+        self.vwap = 0
         self.cum_sum_pct = 0
         self.cum_turnover = 0
         self.cum_volume = 0
@@ -42,13 +42,13 @@ class MovingAverageStrategy:
         turnover = row['turnover']
         volume = row['volume']
 
-        # Update vmap -> prev_vmap
-        self.prev_vmap = self.vmap
+        # Update vwap -> prev_vwap
+        self.prev_vwap = self.vwap
         
-        # Update cumulative VMAP
+        # Update cumulative vwap
         self.cum_turnover += turnover
         self.cum_volume += volume
-        self.vmap = self.cum_turnover / self.cum_volume if self.cum_volume else 0
+        self.vwap = self.cum_turnover / self.cum_volume if self.cum_volume else 0
        
         # Compute pct_diff
         if len(self.prices) <= 1 :
@@ -73,10 +73,18 @@ class MovingAverageStrategy:
 
     def buy_or_sell(self, unrealized_pl_pct=0):
         if len(self.prices) < LONG_WINDOW:
-            return "INITIALIZING", "INITIALIZING"
+            return "INITIALIZING", "INITIALIZING", "INITIALIZING"
         
         action = "HOLD"
         
+        # buy ratio 0 < x < 1
+        trend_strength = (self.short_sma - self.long_sma) / self.long_sma
+        buy_ratio = min(1, trend_strength * 50)
+        if self.max_cash_buy < 1:
+            buy_qty = 0
+        else:
+            buy_qty = int(self.max_cash_buy * buy_ratio)
+
         # sell ratio 0 < x < 1
         sell_ratio = min(1, abs(unrealized_pl_pct) / 2)
         if self.max_position_sell < 1:
@@ -85,23 +93,24 @@ class MovingAverageStrategy:
             sell_qty = int(self.max_position_sell * sell_ratio)
         
         buy_signal = (
-            self.short_sma > self.long_sma
-            and self.vmap > self.prev_vmap
-            and self.max_cash_buy > 0
+            buy_qty > 0
+            and self.short_sma > self.long_sma
+            and self.vwap > self.prev_vwap
+            and self.prices[-1] > self.vwap
         )
         sell_signal = (
-            (self.short_sma < self.long_sma
-            or unrealized_pl_pct >= PROFIT_PCT
+            sell_qty > 0
+            and (self.short_sma < self.long_sma
+            or self.prices[-1] < self.vwap
+            or unrealized_pl_pct >= PROFIT_PCT 
             or unrealized_pl_pct <= LOSS_PCT)
-            and sell_qty > 0
         )
-        
         if buy_signal:
             action = "BUY"
         if sell_signal:
             action = "SELL"
             
-        return action, sell_qty
+        return action, buy_qty, sell_qty
 
     def save_output(self, row, action, order_data=None):
         candle_dict = {
@@ -113,9 +122,9 @@ class MovingAverageStrategy:
             "short_sma": self.short_sma,
             "long_sma": self.long_sma,
             "Short_above_Long": self.short_sma > self.long_sma,
-            "vmap": self.vmap,
-            "prev_vmap": self.prev_vmap,
-            "VMAP_up": self.vmap > self.prev_vmap,
+            "vwap": self.vwap,
+            "prev_vwap": self.prev_vwap,
+            "vwap_up": self.vwap > self.prev_vwap,
             "cost_price": self.cost_price,
             "max_cash_buy": self.max_cash_buy,
             "max_position_sell": self.max_position_sell,
@@ -198,12 +207,17 @@ def initialize_rows(strategy, quote_ctx, prev_date, end_date, lot_size):
         row = df_past.iloc[i]
         strategy.update_state_from_row(row)
         current_price = strategy.prices[-1]
-        strategy.position_open, unurealized_pl_pct, strategy.cost_price = get_position_status(strategy.trade_ctx, current_price)
+        strategy.position_open = False
+        unurealized_pl_pct = 0
+        strategy.cost_price = 0
         if i == 0:
-            # Get available qty for the first row to initialize the strategy state correctly
-            strategy.max_cash_buy, strategy.max_position_sell = get_available_qty(strategy.trade_ctx, current_price, lot_size)
-        action, _ = strategy.buy_or_sell()
+            max_cash_buy, max_position_sell = get_available_qty(strategy.trade_ctx, current_price, lot_size)
+            strategy.max_cash_buy = max_cash_buy + max_position_sell
+            strategy.max_position_sell = 0
+        action, _, _ = strategy.buy_or_sell()
         strategy.save_output(row, action, order_data=None)
+
+    print("Initialized time: ", df_past['time_key'].iloc[-1])
     return unurealized_pl_pct
 
 # ============================================================
@@ -239,14 +253,16 @@ class KlineHandler(CurKlineHandlerBase):
         
         self.strategy.max_cash_buy, self.strategy.max_position_sell = get_available_qty(self.trade_ctx, current_price, self.lot_size)
         # Decide action
-        action, sell_qty = self.strategy.buy_or_sell(unrealized_pl_pct)
+        action, buy_qty, sell_qty = self.strategy.buy_or_sell(unrealized_pl_pct)
 
-        BUY_QTY = self.lot_size * 1
+        BUY_QTY = self.lot_size * buy_qty
         SELL_QTY = self.lot_size * sell_qty
         # Execute action in live mode
         if action == "BUY":
+            print("Max QTY to Buy:", self.strategy.max_cash_buy)
             order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
         elif action == "SELL":
+            print("Max QTY to Sell:", self.strategy.max_position_sell)
             order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, SELL_QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
         else:
             order_data = None
@@ -282,13 +298,14 @@ class OrderHandler(TradeOrderHandlerBase):
                     o['execution_price'] = current_price
                     o['position_open'] = self.strategy.position_open
                     o['cost_price'] = self.strategy.cost_price
+                    o['realized_pl_pct'] = self.strategy.realized_pl_pct
                     o['Position'] = "OPEN" if self.strategy.position_open else "CLOSED"
                     
                     print(f"{SYMBOL} | Price:{o['execution_price']:.2f} "
                     f"| Action:{action} "
                     f"| Time:{o['execution_time']}")
                     if action == 'SELL':
-                        print(f"|Cost Price:{o['cost_price']}, Sell Price:{o['execution_price']},  Profit:{o['unrealized_pl_pct']:.2f}")
+                        print(f"|Cost Price:{o['cost_price']}, Sell Price:{o['execution_price']},  Profit:{o['realized_pl_pct']:.2f}")
                     break
 
         return RET_OK, data
@@ -333,7 +350,7 @@ def start(today_date):
             prev_date = (today_date - BDay(1)).strftime('%Y-%m-%d')
         end_date = prev_date
     
-    unrealized_pl_pct = initialize_rows(strategy, quote_ctx, prev_date, end_date, lot_size)
+    strategy.realized_pl_pct = initialize_rows(strategy, quote_ctx, prev_date, end_date, lot_size)
 
     if live_mode:    
         trade_ctx.set_handler(OrderHandler(strategy, trade_ctx, lot_size))
@@ -366,36 +383,39 @@ def start(today_date):
         total_price = strategy.cost_price * strategy.max_position_sell
         for _, row in df_current.iterrows():
             strategy.update_state_from_row(row)
-            strategy.realized_pl_pct = unrealized_pl_pct
-            action, sell_qty = strategy.buy_or_sell(strategy.realized_pl_pct)
-            if len(strategy.prices):
-                current_price = strategy.prices[-1]
-                strategy.position_open = True
-                if action == 'BUY':
-                    strategy.max_cash_buy -= 1
-                    strategy.max_position_sell += 1
-                    total_price += current_price
-                    strategy.cost_price = total_price / strategy.max_position_sell
-                    strategy.realized_pl_pct = 0
-                elif action == 'SELL':
-                    strategy.max_cash_buy += sell_qty
-                    strategy.max_position_sell -= sell_qty
-                    total_price -= strategy.cost_price * sell_qty
-                    if strategy.max_position_sell > 0:
-                        strategy.cost_price = total_price / strategy.max_position_sell
-                        strategy.realized_pl_pct = (current_price - strategy.cost_price) / strategy.cost_price * 100
-                    else:
-                        strategy.cost_price = 0
-                        strategy.realized_pl_pct = 0
-                    
-                elif action == 'HOLD':
-                    strategy.realized_pl_pct = 0
-
+            current_price = strategy.prices[-1]
+            if strategy.cost_price > 0:
+                unrealized_pl_pct = (current_price - strategy.cost_price) / strategy.cost_price * 100
+            else:
+                unrealized_pl_pct = 0
+            action, buy_qty, sell_qty = strategy.buy_or_sell(unrealized_pl_pct)
+            strategy.position_open = True
+            if action == 'BUY':
+                strategy.max_cash_buy -= buy_qty
+                strategy.max_position_sell += buy_qty
+                total_price += current_price * buy_qty
+                strategy.cost_price = total_price / strategy.max_position_sell
+                strategy.realized_pl_pct = 0
+                print(f"BUY | {buy_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f}")
+            elif action == 'SELL':
+                strategy.max_cash_buy += sell_qty
+                strategy.max_position_sell -= sell_qty
+                total_price -= strategy.cost_price * sell_qty
                 if strategy.max_position_sell > 0:
-                    strategy.position_open = True
+                    strategy.cost_price = total_price / strategy.max_position_sell
+                    strategy.realized_pl_pct = (current_price - strategy.cost_price) / strategy.cost_price * 100
                 else:
-                    strategy.position_open = False
+                    strategy.cost_price = 0
+                    strategy.realized_pl_pct = 0
+                print(f"SELL | {sell_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f} | Profit: {strategy.realized_pl_pct:.2f}")
+            elif action == 'HOLD':
+                strategy.realized_pl_pct = 0
 
+            if strategy.max_position_sell > 0:
+                strategy.position_open = True
+            else:
+                strategy.position_open = False
+            # print(f"Current time: {row['time_key']}, Current price:  {row['close']}, Unrealized P/L: {unrealized_pl_pct}")
             strategy.save_output(row, action, order_data=None)
 
     return strategy, quote_ctx, trade_ctx
@@ -406,8 +426,10 @@ if __name__ == "__main__":
     argparser.add_argument('--date', default=pd.Timestamp.today(), help='Current date, or previous date for backtesting')
     args = argparser.parse_args()
     live_mode = args.live
-    if not live_mode:
-        today_date = pd.to_datetime(args.date + ' 23:59:00')
+    if live_mode:
+        today_date = args.date
+    else:
+        today_date = pd.to_datetime(str(args.date) + ' 23:59:00')
     
     try:
         strategy, quote_ctx, trade_ctx = start(today_date)
