@@ -419,10 +419,7 @@ def start(today_date):
 
                 # get_position_status, need to check if position open (cost_price > 0), close (cost_price < 0)
                 total_price -= current_price * sell_qty
-                if next_max_position_sell > 0:
-                    strategy.realized_pl_pct = (current_price - strategy.cost_price) / strategy.cost_price * 100
-                else:
-                    strategy.realized_pl_pct = 0
+                strategy.realized_pl_pct = strategy.unrealized_pl_pct
                 print(f"SELL | {sell_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f} | Profit: {strategy.realized_pl_pct:.2f}")
             elif action == 'HOLD':
                 strategy.realized_pl_pct = 0

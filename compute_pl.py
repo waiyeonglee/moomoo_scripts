@@ -16,8 +16,8 @@ def main(today_date, live_mode):
         if today_date.strftime('%Y-%m-%d') in log_file and keyword in log_file:
             print(f"Processing log file: {log_file}")
             output_df = pd.read_csv(f'logs/{log_file}')
-            output_df['prev_max_position_sell'] = output_df['max_position_sell'].shift(1)
-            output_df['trade_qty'] = abs(output_df['prev_max_position_sell'] - output_df['max_position_sell'])
+            output_df['next_max_position_sell'] = output_df['max_position_sell'].shift(-1)
+            output_df['trade_qty'] = abs(output_df['next_max_position_sell'] - output_df['max_position_sell'])
 
             buy_df = output_df.loc[output_df['action'] == 'BUY']
             buy_df['capital'] = buy_df[price] * buy_df['trade_qty']
