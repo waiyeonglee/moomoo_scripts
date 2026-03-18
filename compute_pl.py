@@ -2,8 +2,26 @@ import os
 import pandas as pd
 import argparse
 from pandas.tseries.offsets import BDay
+from moomoo import *
+SYMBOL = "HK.00700"
 
 def main(today_date, live_mode):
+    if SYMBOL.startswith("HK."):
+        trade_market = TrdMarket.HK
+        market = 'market_hk'
+    elif SYMBOL.startswith("US."):
+        trade_market = TrdMarket.US
+        market = 'market_us'
+
+    quote_ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+    ret, stock_data = quote_ctx.get_stock_basicinfo(
+        market=trade_market,
+        stock_type=SecurityType.STOCK,
+        code_list=SYMBOL
+    )
+    quote_ctx.close()
+    lot_size = stock_data['lot_size'].iloc[0]
+
     if live_mode:
         keyword = 'live_trading_logs'
         output_filename = 'live'
@@ -20,13 +38,13 @@ def main(today_date, live_mode):
             output_df['trade_qty'] = abs(output_df['next_max_position_sell'] - output_df['max_position_sell'])
 
             buy_df = output_df.loc[output_df['action'] == 'BUY']
-            buy_df['capital'] = buy_df[price] * buy_df['trade_qty']
+            buy_df['capital'] = buy_df[price] * buy_df['trade_qty'] * lot_size
             initial_capital = buy_df['capital'].sum()
 
             sell_df = output_df.loc[output_df['action'] == 'SELL']
-            sell_df['realized_pl'] = (sell_df[price] - sell_df['cost_price']) * sell_df['trade_qty']
+            sell_df['realized_pl'] = (sell_df[price] - sell_df['cost_price']) * sell_df['trade_qty'] * lot_size
             total_pct = sell_df['realized_pl'].sum()/initial_capital * 100
-            print(f"Total Return: {total_pct:.3f}%")
+            print(f"Total Return: {sell_df['realized_pl'].sum():.0f}, {total_pct:.3f}%")
             break
 
     # Save into output, everyday log here

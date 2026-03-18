@@ -11,8 +11,8 @@ SYMBOL = "HK.00700"
 # SYMBOL = "US.AAPL"
 SHORT_WINDOW = 3
 LONG_WINDOW = 15
-PROFIT_PCT = 0.5
-LOSS_PCT = -0.5
+PROFIT_PCT = 0.2
+LOSS_PCT = -0.1
 trade_env = TrdEnv.SIMULATE
 
 # ============================================================
@@ -98,18 +98,18 @@ class MovingAverageStrategy:
         
         # buy ratio 0 < x < 1
         trend_strength = (self.short_sma - self.long_sma) / self.long_sma
-        buy_ratio = min(1, trend_strength * 50)
-        if self.max_cash_buy < 1:
-            buy_qty = 0
-        else:
+        buy_ratio = max(0, min(1, trend_strength * 100))
+        if self.max_cash_buy > 0:
             buy_qty = int(self.max_cash_buy * buy_ratio)
+        else:
+            buy_qty = 0
 
         # sell ratio 0 < x < 1
-        sell_ratio = min(1, abs(pl_pct) / 2)
-        if self.max_position_sell < 1:
-            sell_qty = 0
+        sell_ratio = min(1, abs(pl_pct/LOSS_PCT))
+        if self.max_position_sell > 0:
+            sell_qty = max(1, int(self.max_position_sell * sell_ratio))
         else:
-            sell_qty = int(self.max_position_sell * sell_ratio)
+            sell_qty = 0
         
         buy_signal = (
             buy_qty > 0
@@ -250,11 +250,11 @@ class KlineHandler(CurKlineHandlerBase):
         self.strategy.update_state_from_row(row)
 
         current_price = self.strategy.prices[-1]
-        strategy.unrealized_pl_pct = self.strategy.get_position_status(current_price)
+        self.strategy.unrealized_pl_pct = self.strategy.get_position_status(current_price)
         
         self.strategy.max_cash_buy, self.strategy.max_position_sell = get_available_qty(self.trade_ctx, current_price, self.lot_size)
         # Decide action
-        action, buy_qty, sell_qty = self.strategy.buy_or_sell(strategy.unrealized_pl_pct)
+        action, buy_qty, sell_qty = self.strategy.buy_or_sell(self.strategy.unrealized_pl_pct)
 
         BUY_QTY = self.lot_size * buy_qty
         SELL_QTY = self.lot_size * sell_qty
@@ -390,6 +390,12 @@ def start(today_date):
             strategy.update_state_from_row(row)
             current_price = strategy.prices[-1]
 
+            # Manual function for get_position_status
+            if strategy.max_position_sell > 0:
+                strategy.cost_price = total_price / strategy.max_position_sell
+            else:
+                strategy.cost_price = 0
+
             # get_position_status
             if strategy.cost_price > 0:
                 strategy.position_open = True
@@ -412,16 +418,19 @@ def start(today_date):
                 total_price += current_price * buy_qty
                 strategy.cost_price = total_price / next_max_position_sell
                 strategy.realized_pl_pct = 0
+                strategy.unrealized_pl_pct = (current_price - strategy.cost_price) / strategy.cost_price * 100
                 print(f"BUY | {buy_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f}")
             elif action == 'SELL':
                 next_max_cash_buy = strategy.max_cash_buy + sell_qty
                 next_max_position_sell = strategy.max_position_sell - sell_qty
 
                 # get_position_status, need to check if position open (cost_price > 0), close (cost_price < 0)
-                total_price -= current_price * sell_qty
+                total_price -= strategy.cost_price * sell_qty
                 strategy.realized_pl_pct = strategy.unrealized_pl_pct
                 print(f"SELL | {sell_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f} | Profit: {strategy.realized_pl_pct:.2f}")
             elif action == 'HOLD':
+                next_max_cash_buy = strategy.max_cash_buy
+                next_max_position_sell = strategy.max_position_sell
                 strategy.realized_pl_pct = 0
 
             # Manual function for get_position_status, done before current iteration
@@ -429,19 +438,13 @@ def start(today_date):
                 strategy.position_open = True
             else:
                 strategy.position_open = False
-            # print(f"Current time: {row['time_key']}, Current price:  {row['close']}, Unrealized P/L: {unrealized_pl_pct}")
+            print(f"Current time: {row['time_key']}, Current price:  {row['close']}, Unrealized P/L: {strategy.unrealized_pl_pct}")
             strategy.save_output(row, action, order_data=None)
 
             # To be done before next iteration of buy_or_sell
             # Manual function for get_available_qty
             strategy.max_cash_buy = next_max_cash_buy
             strategy.max_position_sell = next_max_position_sell
-            
-            # Manual function for get_position_status
-            if strategy.max_position_sell > 0:
-                strategy.cost_price = total_price / strategy.max_position_sell
-            else:
-                strategy.cost_price = 0
 
     return strategy, quote_ctx, trade_ctx
 
