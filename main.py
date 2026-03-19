@@ -240,9 +240,6 @@ class KlineHandler(CurKlineHandlerBase):
             return RET_ERROR, data
 
         row = data.iloc[-1]
-        if row['time_key'] == self.strategy.last_candle_time:
-            return RET_OK, data
-    
         self.strategy.last_candle_time = row['time_key']
         print(f"Current time: {row['time_key']}, Current price:  {row['close']}")
 
