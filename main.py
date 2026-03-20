@@ -25,12 +25,13 @@ class MovingAverageStrategy:
         self.output = []
         self.prices = []
         self.last_candle_time = None
+        self.prev_vwap = 0
         self.vwap = 0
         self.cum_sum_pct = 0
         self.cum_turnover = 0
         self.cum_volume = 0
 
-    def update_state_from_row(self, row):
+    def update_state_from_row(self, row, init=False):
 
         # From previous/saved data
         prev_price = self.prices[-1] if self.prices else 0
@@ -41,13 +42,15 @@ class MovingAverageStrategy:
         turnover = row['turnover']
         volume = row['volume']
 
-        # Update vwap -> prev_vwap
-        self.prev_vwap = self.vwap
-        
-        # Update cumulative vwap
-        self.cum_turnover += turnover
-        self.cum_volume += volume
-        self.vwap = self.cum_turnover / self.cum_volume if self.cum_volume else 0
+        # Skip vwap computation during init
+        if init == False:
+            # Update vwap -> prev_vwap
+            self.prev_vwap = self.vwap
+            
+            # Update cumulative vwap
+            self.cum_turnover += turnover
+            self.cum_volume += volume
+            self.vwap = self.cum_turnover / self.cum_volume if self.cum_volume else 0
        
         # Compute pct_diff
         if len(self.prices) <= 1 :
@@ -205,7 +208,7 @@ def initialize_rows(strategy, quote_ctx, prev_date, end_date, lot_size):
     df_past = historical_df.iloc[-LONG_WINDOW+1:]
     for i in range(len(df_past)):
         row = df_past.iloc[i]
-        strategy.update_state_from_row(row)
+        strategy.update_state_from_row(row, init=True)
         current_price = strategy.prices[-1]
         # position, pl_pct, cost price dont matter because no action
         strategy.position_open = False
@@ -247,7 +250,7 @@ class KlineHandler(CurKlineHandlerBase):
         print(f"Current time: {row['time_key']}, Current price:  {row['close']}")
 
         # Update state
-        self.strategy.update_state_from_row(row)
+        self.strategy.update_state_from_row(row, init=False)
 
         current_price = self.strategy.prices[-1]
         self.strategy.unrealized_pl_pct = self.strategy.get_position_status(current_price)
@@ -387,7 +390,7 @@ def start(today_date):
 
         total_price = strategy.cost_price * strategy.max_position_sell
         for _, row in df_current.iterrows():
-            strategy.update_state_from_row(row)
+            strategy.update_state_from_row(row, init=False)
             current_price = strategy.prices[-1]
 
             # Manual function for get_position_status
