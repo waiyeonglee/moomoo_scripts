@@ -77,16 +77,16 @@ class MovingAverageStrategy:
             print("Error fetching positions:", positions)
             return None, None
 
+        self.position_open = False
+        pl_pct = 0
+        self.cost_price = 0
+
         for _, row in positions.iterrows():
             if SYMBOL == row['code'] and row['cost_price'] > 0:
                 self.position_open = True
                 self.cost_price = row['cost_price']
                 pl_pct = (current_price - self.cost_price) / self.cost_price * 100
                 break
-            else:
-                self.position_open = False
-                pl_pct = 0
-                self.cost_price = 0
 
         return pl_pct
     
@@ -240,6 +240,9 @@ class KlineHandler(CurKlineHandlerBase):
             return RET_ERROR, data
 
         row = data.iloc[-1]
+        if row['time_key'] == self.strategy.last_candle_time:
+            return RET_OK, data
+        
         self.strategy.last_candle_time = row['time_key']
         print(f"Current time: {row['time_key']}, Current price:  {row['close']}")
 
