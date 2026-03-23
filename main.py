@@ -312,13 +312,16 @@ class OrderHandler(TradeOrderHandlerBase):
                     current_price = data['dealt_avg_price'].iloc[0]
 
                     # realized -> get cost_price after compute pl
-                    self.strategy.realized_pl_pct = self.strategy.compute_pl(current_price, self.strategy.cost_price)
-                    self.strategy.cost_price = get_position_status(self.trade_ctx)
-
                     match action:
-                        # update cost price if BUY, no update when SELL
+                        # update cost price if BUY
                         case 'BUY':
+                            self.strategy.realized_pl_pct = 0
+                            self.strategy.cost_price = get_position_status(self.trade_ctx)
                             o['cost_price'] = self.strategy.cost_price
+
+                        case 'SELL':
+                            self.strategy.realized_pl_pct = self.strategy.compute_pl(current_price, self.strategy.cost_price)
+                            self.strategy.cost_price = get_position_status(self.trade_ctx)
 
                     o['execution_time'] = data['updated_time'].iloc[0]
                     o['execution_price'] = current_price
@@ -431,7 +434,7 @@ def start(today_date):
                 
                 # compute_pl then get_position_status
                 total_price += current_price * buy_qty
-                strategy.realized_pl_pct = strategy.compute_pl(current_price)
+                strategy.realized_pl_pct = 0
                 strategy.cost_price = total_price / next_max_position_sell
                 print(f"BUY | {buy_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f}")
             elif action == 'SELL':
@@ -441,10 +444,7 @@ def start(today_date):
                 # compute_pl then get_position_status
                 total_price -= strategy.cost_price * sell_qty
                 strategy.realized_pl_pct = strategy.compute_pl(current_price)
-                if next_max_position_sell == 0:
-                    strategy.cost_price = 0
-                else:
-                    strategy.cost_price = total_price / next_max_position_sell
+                # cost price updated, but not logged
                 print(f"SELL | {sell_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f} | Profit: {strategy.realized_pl_pct:.2f}")
             elif action == 'HOLD':
                 next_max_cash_buy = strategy.max_cash_buy
