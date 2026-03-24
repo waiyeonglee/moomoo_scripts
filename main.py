@@ -1,6 +1,7 @@
 import time
 import os
 import argparse
+import talib
 import pandas as pd
 import numpy as np
 from moomoo import *
@@ -11,8 +12,14 @@ SYMBOL = "HK.00700"
 # SYMBOL = "US.AAPL"
 SHORT_WINDOW = 3
 LONG_WINDOW = 15
-PROFIT_PCT = 0.2
-LOSS_PCT = -0.1
+RSI_PERIOD = 14
+MACD_FAST = 5
+MACD_SLOW = 13
+MACD_SIGNAL = 4
+
+window_length = max(LONG_WINDOW, RSI_PERIOD+1, MACD_SLOW + MACD_SIGNAL+1)
+PROFIT_PCT = 0.5
+LOSS_PCT = -0.5
 trade_env = TrdEnv.SIMULATE
 
 # ============================================================
@@ -58,8 +65,6 @@ class MovingAverageStrategy:
             self.pct_diff = (current_price - prev_price) / prev_price * 100
         self.cum_sum_pct += self.pct_diff
         
-       # Maintain rolling window
-        self.prices = self.prices[-LONG_WINDOW:]
         # Compute short SMA if enough prices, else 0
         if len(self.prices) >= SHORT_WINDOW:
             self.short_sma = sum(self.prices[-SHORT_WINDOW:]) / SHORT_WINDOW
@@ -71,6 +76,26 @@ class MovingAverageStrategy:
             self.long_sma = sum(self.prices[-LONG_WINDOW:]) / LONG_WINDOW
         else:
             self.long_sma = 0
+
+        # Compute RSI if enough prices, else 0
+        if len(self.prices) >= RSI_PERIOD+1:
+            self.rsi = talib.RSI(np.array(self.prices[-(RSI_PERIOD+1):]), timeperiod=RSI_PERIOD)[-1]
+        else:
+            self.rsi = 0
+
+        # Compute MACD if enough prices, else 0
+        if len(self.prices) >= MACD_SLOW + MACD_SIGNAL+1:
+            macd, macd_signal, macd_histogram = talib.MACD(
+                np.array(self.prices[-(MACD_SLOW + MACD_SIGNAL+1):]),
+                fastperiod=MACD_FAST,
+                slowperiod=MACD_SLOW,
+                signalperiod=MACD_SIGNAL
+            )
+            self.macd = macd[-1]
+            self.macd_signal = macd_signal[-1]
+            self.macd_histogram = macd_histogram[-1]
+        else:
+            self.macd, self.macd_signal, self.macd_histogram = 0, 0, 0
     
     def compute_pl(self, current_price):
         # unrealized -> to compute pl before BUY/SELL (use current cost_price)
@@ -88,7 +113,7 @@ class MovingAverageStrategy:
         return pl_pct
 
     def buy_or_sell(self, pl_pct=0):
-        if len(self.prices) < LONG_WINDOW:
+        if len(self.prices) < window_length:
             return "INITIALIZING", "INITIALIZING", "INITIALIZING"
         
         action = "HOLD"
@@ -108,15 +133,19 @@ class MovingAverageStrategy:
         else:
             sell_qty = 0
         
+        # RSI replace short/long sma, add MACD, relax VWAP
         buy_signal = (
             buy_qty > 0
-            and self.short_sma > self.long_sma
-            and self.vwap > self.prev_vwap
+            # and self.short_sma > self.long_sma
+            # and self.vwap > self.prev_vwap
             and self.prices[-1] > self.vwap
+            and self.rsi < 70
+            and self.macd > self.macd_signal
         )
         sell_signal = (
             sell_qty > 0
-            and (self.short_sma < self.long_sma
+            # and (self.short_sma < self.long_sma
+            and(self.macd < self.macd_signal
             or self.prices[-1] < self.vwap
             or pl_pct >= PROFIT_PCT 
             or pl_pct <= LOSS_PCT)
@@ -141,6 +170,10 @@ class MovingAverageStrategy:
             "vwap": self.vwap,
             "prev_vwap": self.prev_vwap,
             "vwap_up": self.vwap > self.prev_vwap,
+            "RSI": self.rsi,
+            "MACD": self.macd,
+            "MACD Signal": self.macd_signal,
+            "MACD Histogram": self.macd_histogram,
             "cost_price": self.cost_price,
             "max_cash_buy": self.max_cash_buy,
             "max_position_sell": self.max_position_sell,
@@ -214,8 +247,8 @@ def initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_siz
         print("Error fetching historical data:", historical_df)
         return 0
 
-    # Intialize first LONG_WINDOW-1 candles to fill the strategy state
-    df_past = historical_df.iloc[-LONG_WINDOW+1:]
+    # Intialize first window_length-1 candles to fill the strategy state
+    df_past = historical_df.iloc[-window_length+1:]
     for i in range(len(df_past)):
         row = df_past.iloc[i]
         strategy.update_state_from_row(row, init=True)
