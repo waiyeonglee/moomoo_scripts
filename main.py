@@ -30,7 +30,6 @@ class MovingAverageStrategy:
     def __init__(self):
         self.output = []
         self.prices = []
-        self.last_candle_time = None
         self.prev_vwap = 0
         self.vwap = 0
         self.cum_sum_pct = 0
@@ -278,6 +277,7 @@ class KlineHandler(CurKlineHandlerBase):
         self.strategy = strategy
         self.trade_ctx = trade_ctx
         self.lot_size = lot_size
+        self.prev_candle = None
 
     def on_recv_rsp(self, rsp_pb):
         ret, data = super().on_recv_rsp(rsp_pb)
@@ -285,40 +285,40 @@ class KlineHandler(CurKlineHandlerBase):
             print("Kline error:", data)
             return RET_ERROR, data
 
-        row = data.iloc[-1]
-        if row['time_key'] == self.strategy.last_candle_time:
-            return RET_OK, data
-        
-        self.strategy.last_candle_time = row['time_key']
-        print(f"Current time: {row['time_key']}, Current price:  {row['close']}")
+        current_candle = data.iloc[-1]
+        # When new candle starts, process prev_candle
+        if current_candle['time_key'] != self.prev_candle['time_key']:
+            print(f"Current time: {self.prev_candle['time_key']}, Current price:  {self.prev_candle['close']}")
 
-        # Update state
-        self.strategy.update_state_from_row(row, init=False)
+            # Update state
+            self.strategy.update_state_from_row(self.prev_candle, init=False)
 
-        current_price = self.strategy.prices[-1]
+            current_price = self.strategy.prices[-1]
 
-        # unrealized -> get cost_price before compute pl
-        self.strategy.cost_price = get_position_status(self.trade_ctx)
-        self.strategy.unrealized_pl_pct = self.strategy.compute_pl(current_price)
-        
-        self.strategy.max_cash_buy, self.strategy.max_position_sell = get_available_qty(self.trade_ctx, current_price, self.lot_size)
-        # Decide action
-        action, buy_qty, sell_qty = self.strategy.buy_or_sell(self.strategy.unrealized_pl_pct)
-
-        BUY_QTY = self.lot_size * buy_qty
-        SELL_QTY = self.lot_size * sell_qty
-        # Execute action in live mode
-        if action == "BUY":
-            print("Max QTY to Buy:", self.strategy.max_cash_buy)
-            order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
-        elif action == "SELL":
-            print("Max QTY to Sell:", self.strategy.max_position_sell)
-            order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, SELL_QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
-        else:
-            order_data = None
-            self.strategy.realized_pl_pct = 0
-        self.strategy.save_output(row, action, order_data)
+            # unrealized -> get cost_price before compute pl
+            self.strategy.cost_price = get_position_status(self.trade_ctx)
+            self.strategy.unrealized_pl_pct = self.strategy.compute_pl(current_price)
             
+            self.strategy.max_cash_buy, self.strategy.max_position_sell = get_available_qty(self.trade_ctx, current_price, self.lot_size)
+            # Decide action
+            action, buy_qty, sell_qty = self.strategy.buy_or_sell(self.strategy.unrealized_pl_pct)
+
+            BUY_QTY = self.lot_size * buy_qty
+            SELL_QTY = self.lot_size * sell_qty
+            # Execute action in live mode
+            if action == "BUY":
+                print("Max QTY to Buy:", self.strategy.max_cash_buy)
+                order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
+            elif action == "SELL":
+                print("Max QTY to Sell:", self.strategy.max_position_sell)
+                order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, SELL_QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
+            else:
+                order_data = None
+                self.strategy.realized_pl_pct = 0
+            self.strategy.save_output(self.prev_candle, action, order_data)
+        
+        self.prev_candle = current_candle
+
         return RET_OK, data
 
 # ============================================================
@@ -353,7 +353,7 @@ class OrderHandler(TradeOrderHandlerBase):
                             o['cost_price'] = self.strategy.cost_price
 
                         case 'SELL':
-                            self.strategy.realized_pl_pct = self.strategy.compute_pl(current_price, self.strategy.cost_price)
+                            self.strategy.realized_pl_pct = self.strategy.compute_pl(current_price)
                             self.strategy.cost_price = get_position_status(self.trade_ctx)
 
                     o['execution_time'] = data['updated_time'].iloc[0]
