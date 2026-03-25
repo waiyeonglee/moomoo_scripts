@@ -10,16 +10,15 @@ from pandas.tseries.offsets import BDay
 # ================= CONFIG =================
 SYMBOL = "HK.00700"
 # SYMBOL = "US.AAPL"
-SHORT_WINDOW = 3
-LONG_WINDOW = 15
+RSI_threshold = 60
 RSI_PERIOD = 14
-MACD_FAST = 5
-MACD_SLOW = 13
-MACD_SIGNAL = 4
+SHORT_WINDOW = 12
+LONG_WINDOW = 26
+MACD_SIGNAL = 9
 
-window_length = max(LONG_WINDOW, RSI_PERIOD+1, MACD_SLOW + MACD_SIGNAL+1)
-PROFIT_PCT = 0.5
-LOSS_PCT = -0.5
+window_length = max(RSI_PERIOD+1, LONG_WINDOW + MACD_SIGNAL+1)
+PROFIT_PCT = 0.8
+LOSS_PCT = -0.4
 trade_env = TrdEnv.SIMULATE
 
 # ============================================================
@@ -83,11 +82,11 @@ class MovingAverageStrategy:
             self.rsi = 0
 
         # Compute MACD if enough prices, else 0
-        if len(self.prices) >= MACD_SLOW + MACD_SIGNAL+1:
+        if len(self.prices) >= LONG_WINDOW + MACD_SIGNAL+1:
             macd, macd_signal, macd_histogram = talib.MACD(
-                np.array(self.prices[-(MACD_SLOW + MACD_SIGNAL+1):]),
-                fastperiod=MACD_FAST,
-                slowperiod=MACD_SLOW,
+                np.array(self.prices[-(LONG_WINDOW + MACD_SIGNAL+1):]),
+                fastperiod=SHORT_WINDOW,
+                slowperiod=LONG_WINDOW,
                 signalperiod=MACD_SIGNAL
             )
             self.macd = macd[-1]
@@ -118,7 +117,7 @@ class MovingAverageStrategy:
         action = "HOLD"
         
         # buy ratio 0 < x < 1
-        trend_strength = (self.short_sma - self.long_sma) / self.long_sma
+        trend_strength = self.macd
         buy_ratio = max(0, min(1, trend_strength * 100))
         if self.max_cash_buy > 0:
             buy_qty = int(self.max_cash_buy * buy_ratio)
@@ -136,16 +135,16 @@ class MovingAverageStrategy:
         buy_signal = (
             buy_qty > 0
             # and self.short_sma > self.long_sma
-            # and self.vwap > self.prev_vwap
-            and self.prices[-1] > self.vwap
-            and self.rsi < 70
             and self.macd > self.macd_signal
+            # and self.vwap > self.prev_vwap
+            # and self.prices[-1] > self.vwap
+            and self.rsi < RSI_threshold
         )
         sell_signal = (
             sell_qty > 0
             # and (self.short_sma < self.long_sma
-            and(self.macd < self.macd_signal
-            or self.prices[-1] < self.vwap
+            and (self.macd < self.macd_signal
+            # or self.prices[-1] < self.vwap
             or pl_pct >= PROFIT_PCT 
             or pl_pct <= LOSS_PCT)
         )
@@ -165,13 +164,15 @@ class MovingAverageStrategy:
             "pct_diff": self.pct_diff,
             "short_sma": self.short_sma,
             "long_sma": self.long_sma,
-            "Short_above_Long": self.short_sma > self.long_sma,
-            "vwap": self.vwap,
-            "prev_vwap": self.prev_vwap,
-            "vwap_up": self.vwap > self.prev_vwap,
+            # "vwap": self.vwap,
+            # "prev_vwap": self.prev_vwap,
+            # "vwap_up": self.vwap > self.prev_vwap,
             "RSI": self.rsi,
             "MACD": self.macd,
             "MACD Signal": self.macd_signal,
+            "MACD_up": (self.macd - self.macd_signal) > 0,
+            "hit_profit": self.unrealized_pl_pct >= PROFIT_PCT,
+            "hit_loss": self.unrealized_pl_pct <= LOSS_PCT,
             "MACD Histogram": self.macd_histogram,
             "cost_price": self.cost_price,
             "max_cash_buy": self.max_cash_buy,
@@ -267,6 +268,21 @@ def initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_siz
     print("Initialized time: ", df_past['time_key'].iloc[-1])
     return None
 
+def compute_pl(output_df, file_name, price, lot_size):
+    output_filename = file_name.split('_')[0]
+    output_df['next_max_position_sell'] = output_df['max_position_sell'].shift(-1)
+    output_df['trade_qty'] = abs(output_df['next_max_position_sell'] - output_df['max_position_sell'])
+
+    buy_df = output_df.loc[output_df['action'] == 'BUY']
+    buy_df['capital'] = buy_df[price] * buy_df['trade_qty'] * lot_size
+    initial_capital = buy_df['capital'].sum()
+
+    sell_df = output_df.loc[output_df['action'] == 'SELL']
+    sell_df['realized_pl'] = (sell_df[price] - sell_df['cost_price']) * sell_df['trade_qty'] * lot_size
+    total_pct = sell_df['realized_pl'].sum()/initial_capital * 100
+    print(f"Total Return: {sell_df['realized_pl'].sum():.0f}, {total_pct:.3f}%")
+    output_path = os.path.join(os.getcwd(), 'logs', f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - pl_{output_filename}.csv")
+    sell_df.to_csv(output_path)
 # ============================================================
 # QUOTE CALLBACK
 # ============================================================
@@ -498,7 +514,7 @@ def start(today_date):
             strategy.max_cash_buy = next_max_cash_buy
             strategy.max_position_sell = next_max_position_sell
 
-    return strategy, quote_ctx, trade_ctx
+    return strategy, quote_ctx, trade_ctx, lot_size
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description='Run the trading bot in live or test mode.')
@@ -512,7 +528,7 @@ if __name__ == "__main__":
         today_date = pd.to_datetime(str(args.date) + ' 23:59:00')
     
     try:
-        strategy, quote_ctx, trade_ctx = start(today_date)
+        strategy, quote_ctx, trade_ctx, lot_size = start(today_date)
     except KeyboardInterrupt:
         print("Stopped by user.")
     finally:
@@ -520,9 +536,13 @@ if __name__ == "__main__":
             output_df = pd.DataFrame(strategy.output)
             if live_mode:
                 file_name = 'live_trading_logs.csv'
+                price = 'execution_price'
             else:
                 file_name = 'simulated_trading_logs.csv'
+                price = 'close'
             output_path = os.path.join(os.getcwd(), 'logs', f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {file_name}")
             output_df.to_csv(output_path)
+
+            compute_pl(output_df, file_name, price, lot_size)
             quote_ctx.close()
             trade_ctx.close()
