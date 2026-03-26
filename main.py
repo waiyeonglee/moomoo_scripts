@@ -303,6 +303,8 @@ class KlineHandler(CurKlineHandlerBase):
 
         current_candle = data.iloc[-1]
         # When new candle starts, process prev_candle
+        if self.prev_candle is None:
+            self.prev_candle = current_candle
         if current_candle['time_key'] != self.prev_candle['time_key']:
             print(f"Current time: {self.prev_candle['time_key']}, Current price:  {self.prev_candle['close']}")
 
