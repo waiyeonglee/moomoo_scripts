@@ -279,7 +279,11 @@ def compute_pl(output_df, file_name, price, lot_size):
 
     sell_df = output_df.loc[output_df['action'] == 'SELL']
     sell_df['realized_pl'] = (sell_df[price] - sell_df['cost_price']) * sell_df['trade_qty'] * lot_size
-    total_pct = sell_df['realized_pl'].sum()/initial_capital * 100
+    if initial_capital > 0:
+        total_pct = sell_df['realized_pl'].sum()/initial_capital * 100
+    else:
+        total_pct = 0
+        
     print(f"Total Return: {sell_df['realized_pl'].sum():.0f}, {total_pct:.3f}%")
     output_path = os.path.join(os.getcwd(), 'logs', f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - pl_{output_filename}.csv")
     sell_df.to_csv(output_path)
@@ -325,10 +329,10 @@ class KlineHandler(CurKlineHandlerBase):
             SELL_QTY = self.lot_size * sell_qty
             # Execute action in live mode
             if action == "BUY":
-                print("Max QTY to Buy:", self.strategy.max_cash_buy)
+                print("Max QTY to Buy:", self.strategy.max_cash_buy, BUY_QTY)
                 order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
             elif action == "SELL":
-                print("Max QTY to Sell:", self.strategy.max_position_sell)
+                print("Max QTY to Sell:", self.strategy.max_position_sell, SELL_QTY)
                 order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, SELL_QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
             else:
                 order_data = None
