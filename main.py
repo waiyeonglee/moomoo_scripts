@@ -10,7 +10,7 @@ from pandas.tseries.offsets import BDay
 # ================= CONFIG =================
 SYMBOL = "HK.00700"
 # SYMBOL = "US.AAPL"
-RSI_threshold = 60
+RSI_threshold = 70
 RSI_PERIOD = 14
 SHORT_WINDOW = 12
 LONG_WINDOW = 26
@@ -117,8 +117,8 @@ class MovingAverageStrategy:
         action = "HOLD"
         
         # buy ratio 0 < x < 1
-        trend_strength = self.macd
-        buy_ratio = max(0, min(1, trend_strength * 100))
+        trend_strength = self.macd - self.macd_signal
+        buy_ratio = max(0, min(0.9, trend_strength/0.02))
         if self.max_cash_buy > 0:
             buy_qty = int(self.max_cash_buy * buy_ratio)
         else:
@@ -329,10 +329,10 @@ class KlineHandler(CurKlineHandlerBase):
             SELL_QTY = self.lot_size * sell_qty
             # Execute action in live mode
             if action == "BUY":
-                print("Max QTY to Buy:", self.strategy.max_cash_buy, BUY_QTY)
-                order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
+                print("Max QTY to Buy:", self.strategy.max_cash_buy)
+                order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.NORMAL, trade_env)
             elif action == "SELL":
-                print("Max QTY to Sell:", self.strategy.max_position_sell, SELL_QTY)
+                print("Max QTY to Sell:", self.strategy.max_position_sell)
                 order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, SELL_QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
             else:
                 order_data = None
