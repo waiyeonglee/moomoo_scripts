@@ -17,8 +17,8 @@ LONG_WINDOW = 26
 MACD_SIGNAL = 9
 
 window_length = max(RSI_PERIOD+1, LONG_WINDOW + MACD_SIGNAL+1)
-PROFIT_PCT = 0.8
-LOSS_PCT = -0.4
+PROFIT_PCT = 0.6
+LOSS_PCT = -1
 trade_env = TrdEnv.SIMULATE
 
 # ============================================================
@@ -452,7 +452,7 @@ def start(today_date):
                 print(f"[QUOTE] get_global_state failed, ret={df_state}")
             if df_state[market] == 'CLOSED':
                 print("LOOP EXITED: Market closed")
-                break
+                return strategy, quote_ctx, trade_ctx, lot_size
             time.sleep(1)
     else:
         ret, df_current, _ = quote_ctx.request_history_kline(
