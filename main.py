@@ -10,15 +10,15 @@ from pandas.tseries.offsets import BDay
 # ================= CONFIG =================
 SYMBOL = "HK.00700"
 # SYMBOL = "US.AAPL"
-RSI_threshold = 70
+RSI_threshold = 50
 RSI_PERIOD = 14
 SHORT_WINDOW = 12
 LONG_WINDOW = 26
 MACD_SIGNAL = 9
 
 window_length = max(RSI_PERIOD+1, LONG_WINDOW + MACD_SIGNAL+1)
-PROFIT_PCT = 0.6
-LOSS_PCT = -1
+PROFIT_PCT = 1.0
+LOSS_PCT = -0.5
 trade_env = TrdEnv.SIMULATE
 
 # ============================================================
@@ -212,7 +212,7 @@ def get_position_status(trade_ctx):
     ret, positions = trade_ctx.position_list_query(trd_env=trade_env)
     if ret != RET_OK:
         print("Error fetching positions:", positions)
-        return None, None
+        return None
     
     # for CLOSED positions
     cost_price = 0
@@ -250,25 +250,36 @@ def initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_siz
     # Intialize first window_length-1 candles to fill the strategy state
     df_past = historical_df.iloc[-window_length+1:]
     for i in range(len(df_past)):
+        
         row = df_past.iloc[i]
         strategy.update_state_from_row(row, init=True)
         current_price = strategy.prices[-1]
-        # position, pl_pct, cost price dont matter because no action
-        strategy.position_open = False
-        strategy.unrealized_pl_pct = 0
+        
+        if live_mode:
+            strategy.cost_price = get_position_status(trade_ctx)
+            strategy.unrealized_pl_pct = strategy.compute_pl(current_price)
+        else:
+            strategy.position_open = False
+            strategy.unrealized_pl_pct = 0
+            strategy.cost_price = 0
+
         strategy.realized_pl_pct = 0
-        strategy.cost_price = 0
+
         if i == 0:
             max_cash_buy, max_position_sell = get_available_qty(trade_ctx, current_price, lot_size)
-            strategy.max_cash_buy = max_cash_buy + max_position_sell
-            strategy.max_position_sell = 0
+            if live_mode:
+                strategy.max_cash_buy = max_cash_buy
+                strategy.max_position_sell = max_position_sell
+            else:
+                strategy.max_cash_buy = max_cash_buy + max_position_sell
+                strategy.max_position_sell = 0
         action, _, _ = strategy.buy_or_sell()
         strategy.save_output(row, action, order_data=None)
 
     print("Initialized time: ", df_past['time_key'].iloc[-1])
     return None
 
-def compute_pl(output_df, file_name, price, lot_size):
+def compute_daily_pl(output_df, file_name, price, lot_size):
     output_filename = file_name.split('_')[0]
     output_df['next_max_position_sell'] = output_df['max_position_sell'].shift(-1)
     output_df['trade_qty'] = abs(output_df['next_max_position_sell'] - output_df['max_position_sell'])
@@ -549,6 +560,6 @@ if __name__ == "__main__":
             output_path = os.path.join(os.getcwd(), 'logs', f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {file_name}")
             output_df.to_csv(output_path)
 
-            compute_pl(output_df, file_name, price, lot_size)
+            compute_daily_pl(output_df, file_name, price, lot_size)
             quote_ctx.close()
             trade_ctx.close()
