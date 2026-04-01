@@ -1,4 +1,5 @@
 {
+    "python.defaultInterpreterPath": "/opt/homebrew/anaconda3/envs/moomoo/bin/python",
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
     "python-envs.pythonProjects": [

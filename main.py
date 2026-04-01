@@ -320,6 +320,7 @@ class KlineHandler(CurKlineHandlerBase):
         # When new candle starts, process prev_candle
         if self.prev_candle is None:
             self.prev_candle = current_candle
+            self.strategy.save_output(self.prev_candle, action, order_data)
         if current_candle['time_key'] != self.prev_candle['time_key']:
             print(f"Current time: {self.prev_candle['time_key']}, Current price:  {self.prev_candle['close']}")
 
