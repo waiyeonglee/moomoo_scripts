@@ -241,7 +241,7 @@ def initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_siz
         prev_date,
         end_date,
         SubType.K_1M, 
-        AuType.QFQ
+        AuType.NONE
     )
     if ret != RET_OK:
         print("Error fetching historical data:", historical_df)
@@ -320,7 +320,8 @@ class KlineHandler(CurKlineHandlerBase):
         # When new candle starts, process prev_candle
         if self.prev_candle is None:
             self.prev_candle = current_candle
-            self.strategy.save_output(self.prev_candle, action, order_data)
+            action ='HOLD'
+            self.strategy.save_output(self.prev_candle, action, order_data=None)
         if current_candle['time_key'] != self.prev_candle['time_key']:
             print(f"Current time: {self.prev_candle['time_key']}, Current price:  {self.prev_candle['close']}")
 
@@ -434,16 +435,15 @@ def start(today_date):
     lot_size = stock_data['lot_size'].iloc[0]
 
     # Intialize first LONG_WINDOW-1 rows to fill the strategy state
+    prev_date = (today_date - BDay(5)).strftime('%Y-%m-%d')
     if live_mode:
-        prev_date = (today_date - BDay(1)).strftime('%Y-%m-%d')
         end_date = today_date.strftime('%Y-%m-%d')
     else:
         if today_date.time() < pd.Timestamp("09:30").time():
             # before market open → use last completed trading day
-            prev_date = (today_date - BDay(2)).strftime('%Y-%m-%d')
+            end_date = (today_date - BDay(2)).strftime('%Y-%m-%d')
         else:
-            prev_date = (today_date - BDay(1)).strftime('%Y-%m-%d')
-        end_date = prev_date
+            end_date = (today_date - BDay(1)).strftime('%Y-%m-%d')
     
     initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_size)
 
@@ -469,10 +469,10 @@ def start(today_date):
     else:
         ret, df_current, _ = quote_ctx.request_history_kline(
             SYMBOL,
-            (pd.to_datetime(prev_date) + BDay(1)).strftime('%Y-%m-%d'),
-            (pd.to_datetime(prev_date) + BDay(1)).strftime('%Y-%m-%d'),
+            (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
+            (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
             SubType.K_1M, 
-            AuType.QFQ
+            AuType.NONE
         )
 
         total_price = strategy.cost_price * strategy.max_position_sell
