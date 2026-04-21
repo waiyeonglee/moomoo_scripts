@@ -8,17 +8,19 @@ from moomoo import *
 from pandas.tseries.offsets import BDay
 
 # ================= CONFIG =================
+# SYMBOL = "HK.00068"
 SYMBOL = "HK.00700"
 # SYMBOL = "US.AAPL"
-RSI_threshold = 50
+RSI_threshold_follow = 55
+RSI_threshold_revert = 35
 RSI_PERIOD = 14
 SHORT_WINDOW = 12
 LONG_WINDOW = 26
 MACD_SIGNAL = 9
 
 window_length = max(RSI_PERIOD+1, LONG_WINDOW + MACD_SIGNAL+1)
-PROFIT_PCT = 1.0
-LOSS_PCT = -0.5
+PROFIT_PCT = 1.5
+LOSS_PCT = -1.0
 trade_env = TrdEnv.SIMULATE
 
 # ============================================================
@@ -118,7 +120,7 @@ class MovingAverageStrategy:
         
         # buy ratio 0 < x < 1
         trend_strength = self.macd - self.macd_signal
-        buy_ratio = max(0, min(0.9, trend_strength/0.02))
+        buy_ratio = max(0, min(0.9, trend_strength/0.005))
         if self.max_cash_buy > 0:
             buy_qty = int(self.max_cash_buy * buy_ratio)
         else:
@@ -131,23 +133,35 @@ class MovingAverageStrategy:
         else:
             sell_qty = 0
         
-        # RSI replace short/long sma, add MACD, relax VWAP
-        buy_signal = (
-            buy_qty > 0
-            # and self.short_sma > self.long_sma
-            and self.macd > self.macd_signal
-            # and self.vwap > self.prev_vwap
-            # and self.prices[-1] > self.vwap
-            and self.rsi < RSI_threshold
-        )
-        sell_signal = (
-            sell_qty > 0
-            # and (self.short_sma < self.long_sma
-            and (self.macd < self.macd_signal
-            # or self.prices[-1] < self.vwap
-            or pl_pct >= PROFIT_PCT 
-            or pl_pct <= LOSS_PCT)
-        )
+        # A: trend following
+        if self.market_trend > 0:
+            buy_signal = (
+                buy_qty > 0
+                and trend_strength > 0
+                and self.rsi > RSI_threshold_follow
+            )
+        # B: mean reversion
+        else:
+             buy_signal = (
+                buy_qty > 0
+                and trend_strength < 0
+                and self.rsi < RSI_threshold_revert
+            )
+
+        # if pl_pct >= PROFIT_PCT, only sell when hit loss pct or above, regardless of MACD signal (take profit)
+        if pl_pct >= PROFIT_PCT:
+            sell_signal = (
+                sell_qty > 0
+                and self.macd < self.macd_signal
+                and self.rsi < RSI_threshold_revert
+            )
+        else:
+        # if not hit profit pct, sell when MACD signal is unfavorable or hit loss pct (cut loss)
+            sell_signal = (
+                sell_qty > 0
+                and (self.macd < self.macd_signal
+                or pl_pct <= LOSS_PCT)
+            )
         if buy_signal:
             action = "BUY"
         if sell_signal:
@@ -185,6 +199,7 @@ class MovingAverageStrategy:
             "unrealized_pl_pct": self.unrealized_pl_pct,
             "realized_pl_pct": self.realized_pl_pct,
             "cum_sum_pct": self.cum_sum_pct,
+            "market_trend": self.market_trend
         }
 
         self.output.append(candle_dict)
@@ -263,6 +278,7 @@ def initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_siz
             strategy.unrealized_pl_pct = 0
             strategy.cost_price = 0
 
+        strategy.market_trend = 0
         strategy.realized_pl_pct = 0
 
         if i == 0:
@@ -279,7 +295,7 @@ def initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_siz
     print("Initialized time: ", df_past['time_key'].iloc[-1])
     return None
 
-def compute_daily_pl(output_df, file_name, price, lot_size):
+def compute_daily_pl(today_date, output_df, file_name, price, lot_size):
     output_filename = file_name.split('_')[0]
     output_df['next_max_position_sell'] = output_df['max_position_sell'].shift(-1)
     output_df['trade_qty'] = abs(output_df['next_max_position_sell'] - output_df['max_position_sell'])
@@ -287,7 +303,7 @@ def compute_daily_pl(output_df, file_name, price, lot_size):
     buy_df = output_df.loc[output_df['action'] == 'BUY']
     buy_df['capital'] = buy_df[price] * buy_df['trade_qty'] * lot_size
     initial_capital = buy_df['capital'].sum()
-
+    print(f"Initial Capital: {initial_capital:.0f}")
     sell_df = output_df.loc[output_df['action'] == 'SELL']
     sell_df['realized_pl'] = (sell_df[price] - sell_df['cost_price']) * sell_df['trade_qty'] * lot_size
     if initial_capital > 0:
@@ -302,7 +318,7 @@ def compute_daily_pl(output_df, file_name, price, lot_size):
 # QUOTE CALLBACK
 # ============================================================
 class KlineHandler(CurKlineHandlerBase):
-
+    
     def __init__(self, strategy, trade_ctx, lot_size):
         super().__init__()
         self.strategy = strategy
@@ -335,6 +351,10 @@ class KlineHandler(CurKlineHandlerBase):
             self.strategy.unrealized_pl_pct = self.strategy.compute_pl(current_price)
             
             self.strategy.max_cash_buy, self.strategy.max_position_sell = get_available_qty(self.trade_ctx, current_price, self.lot_size)
+            
+            # get trend signal
+            ret, data = self.get_market_snapshot(['HK.800000'])
+            self.strategy.market_trend = data['last_price'] - data['prev_close_price']
             # Decide action
             action, buy_qty, sell_qty = self.strategy.buy_or_sell(self.strategy.unrealized_pl_pct)
 
@@ -343,7 +363,7 @@ class KlineHandler(CurKlineHandlerBase):
             # Execute action in live mode
             if action == "BUY":
                 print("Max QTY to Buy:", self.strategy.max_cash_buy)
-                order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.NORMAL, trade_env)
+                order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
             elif action == "SELL":
                 print("Max QTY to Sell:", self.strategy.max_position_sell)
                 order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, SELL_QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
@@ -475,6 +495,14 @@ def start(today_date):
             AuType.NONE
         )
 
+        ret2, df_HSI, _ = quote_ctx.request_history_kline(
+                "HK.800000",
+                (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
+                (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
+                SubType.K_1M, 
+                AuType.NONE
+            )
+        
         total_price = strategy.cost_price * strategy.max_position_sell
         for _, row in df_current.iterrows():
             strategy.update_state_from_row(row, init=False)
@@ -492,6 +520,8 @@ def start(today_date):
             # get_available_qty called once during init rows
 
             # buy_or_sell
+            curr_time = row['time_key']
+            strategy.market_trend = df_HSI.loc[df_HSI['time_key'] == curr_time, 'close'].iloc[0] - df_HSI.loc[df_HSI['time_key'] == curr_time, 'last_close'].iloc[0]
             action, buy_qty, sell_qty = strategy.buy_or_sell(strategy.unrealized_pl_pct)
             
             # place_order + OrderHandler
@@ -561,6 +591,6 @@ if __name__ == "__main__":
             output_path = os.path.join(os.getcwd(), 'logs', f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {file_name}")
             output_df.to_csv(output_path)
 
-            compute_daily_pl(output_df, file_name, price, lot_size)
+            compute_daily_pl(today_date, output_df, file_name, price, lot_size)
             quote_ctx.close()
             trade_ctx.close()
