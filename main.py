@@ -319,9 +319,10 @@ def compute_daily_pl(today_date, output_df, file_name, price, lot_size):
 # ============================================================
 class KlineHandler(CurKlineHandlerBase):
     
-    def __init__(self, strategy, trade_ctx, lot_size):
+    def __init__(self, strategy, quote_ctx, trade_ctx, lot_size):
         super().__init__()
         self.strategy = strategy
+        self.quote_ctx = quote_ctx
         self.trade_ctx = trade_ctx
         self.lot_size = lot_size
         self.prev_candle = None
@@ -353,8 +354,8 @@ class KlineHandler(CurKlineHandlerBase):
             self.strategy.max_cash_buy, self.strategy.max_position_sell = get_available_qty(self.trade_ctx, current_price, self.lot_size)
             
             # get trend signal
-            ret, data = self.get_market_snapshot(['HK.800000'])
-            self.strategy.market_trend = data['last_price'] - data['prev_close_price']
+            ret, data = self.quote_ctx.get_market_snapshot(['HK.800000'])
+            self.strategy.market_trend = data['last_price'].iloc[0] - data['prev_close_price'].iloc[0]
             # Decide action
             action, buy_qty, sell_qty = self.strategy.buy_or_sell(self.strategy.unrealized_pl_pct)
 
@@ -455,7 +456,7 @@ def start(today_date):
     lot_size = stock_data['lot_size'].iloc[0]
 
     # Intialize first LONG_WINDOW-1 rows to fill the strategy state
-    prev_date = (today_date - BDay(5)).strftime('%Y-%m-%d')
+    prev_date = (today_date - BDay(3)).strftime('%Y-%m-%d')
     if live_mode:
         end_date = today_date.strftime('%Y-%m-%d')
     else:
@@ -469,7 +470,7 @@ def start(today_date):
 
     if live_mode:    
         trade_ctx.set_handler(OrderHandler(strategy, trade_ctx, lot_size))
-        quote_ctx.set_handler(KlineHandler(strategy, trade_ctx, lot_size))
+        quote_ctx.set_handler(KlineHandler(strategy, quote_ctx, trade_ctx, lot_size))
         ret, data = quote_ctx.subscribe([SYMBOL], [SubType.K_1M], subscribe_push=True)
         if ret != RET_OK:
             print(f"Subscription failed: {data}")
