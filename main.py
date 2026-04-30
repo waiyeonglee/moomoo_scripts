@@ -410,7 +410,6 @@ class OrderHandler(TradeOrderHandlerBase):
 
                         case 'SELL':
                             self.strategy.realized_pl_pct = self.strategy.compute_pl(current_price)
-                            self.strategy.cost_price = get_position_status(self.trade_ctx)
 
                     o['execution_time'] = data['updated_time'].iloc[0]
                     o['execution_price'] = current_price
@@ -512,9 +511,9 @@ def start(today_date):
             # Manual function for get_position_status
             # unrealized -> get cost_price before compute pl
             if strategy.max_position_sell > 0:
-                strategy.cost_price = total_price / strategy.max_position_sell
+                total_price = strategy.cost_price * strategy.max_position_sell
             else:
-                strategy.cost_price = 0
+                total_price = 0
 
             strategy.unrealized_pl_pct = strategy.compute_pl(current_price)
 
@@ -539,10 +538,9 @@ def start(today_date):
                 next_max_cash_buy = strategy.max_cash_buy + sell_qty
                 next_max_position_sell = strategy.max_position_sell - sell_qty
 
-                # compute_pl then get_position_status
-                total_price -= strategy.cost_price * sell_qty
+                # compute_pl
                 strategy.realized_pl_pct = strategy.compute_pl(current_price)
-                # cost price updated, but not logged
+                # cost price not updated, but not logged
                 print(f"SELL | {sell_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f} | Profit: {strategy.realized_pl_pct:.2f}")
             elif action == 'HOLD':
                 next_max_cash_buy = strategy.max_cash_buy
@@ -590,6 +588,7 @@ if __name__ == "__main__":
                 file_name = 'simulated_trading_logs.csv'
                 price = 'close'
             output_path = os.path.join(os.getcwd(), 'logs', f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {file_name}")
+            print(output_path)
             output_df.to_csv(output_path)
 
             compute_daily_pl(today_date, output_df, file_name, price, lot_size)
