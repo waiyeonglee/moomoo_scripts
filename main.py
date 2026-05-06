@@ -191,6 +191,7 @@ class MovingAverageStrategy:
             "cost_price": self.cost_price,
             "max_cash_buy": self.max_cash_buy,
             "max_position_sell": self.max_position_sell,
+            "trade_qty": self.trade_qty,
             "action": action,
             "order_id": order_data['order_id'].iloc[0] if order_data is not None else None,
             "execution_time": "NA",
@@ -290,22 +291,20 @@ def initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_siz
                 strategy.max_cash_buy = max_cash_buy + max_position_sell
                 strategy.max_position_sell = 0
         action, _, _ = strategy.buy_or_sell()
+        strategy.trade_qty = 0
         strategy.save_output(row, action, order_data=None)
 
     print("Initialized time: ", df_past['time_key'].iloc[-1])
     return None
 
-def compute_daily_pl(today_date, output_df, file_name, price, lot_size):
+def compute_daily_pl(today_date, output_df, file_name, price):
     output_filename = file_name.split('_')[0]
-    output_df['next_max_position_sell'] = output_df['max_position_sell'].shift(-1)
-    output_df['trade_qty'] = abs(output_df['next_max_position_sell'] - output_df['max_position_sell'])
 
     buy_df = output_df.loc[output_df['action'] == 'BUY']
-    buy_df['capital'] = buy_df[price] * buy_df['trade_qty'] * lot_size
-    initial_capital = buy_df['capital'].sum()
+    initial_capital = (buy_df[price] * buy_df['trade_qty']).max()
     print(f"Initial Capital: {initial_capital:.0f}")
     sell_df = output_df.loc[output_df['action'] == 'SELL']
-    sell_df['realized_pl'] = (sell_df[price] - sell_df['cost_price']) * sell_df['trade_qty'] * lot_size
+    sell_df['realized_pl'] = (sell_df[price] - sell_df['cost_price']) * sell_df['trade_qty']
     if initial_capital > 0:
         total_pct = sell_df['realized_pl'].sum()/initial_capital * 100
     else:
@@ -365,12 +364,15 @@ class KlineHandler(CurKlineHandlerBase):
             if action == "BUY":
                 print("Max QTY to Buy:", self.strategy.max_cash_buy)
                 order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, BUY_QTY, TrdSide.BUY, OrderType.MARKET, trade_env)
+                self.strategy.trade_qty = BUY_QTY
             elif action == "SELL":
                 print("Max QTY to Sell:", self.strategy.max_position_sell)
                 order_data = place_order(self.trade_ctx, self.strategy.prices[-1], SYMBOL, SELL_QTY, TrdSide.SELL, OrderType.MARKET, trade_env)
+                self.strategy.trade_qty = SELL_QTY
             else:
                 order_data = None
                 self.strategy.realized_pl_pct = 0
+                self.strategy.trade_qty = 0
             self.strategy.save_output(self.prev_candle, action, order_data)
         
         self.prev_candle = current_candle
@@ -514,6 +516,7 @@ def start(today_date):
                 total_price = strategy.cost_price * strategy.max_position_sell
             else:
                 total_price = 0
+                strategy.cost_price = 0
 
             strategy.unrealized_pl_pct = strategy.compute_pl(current_price)
 
@@ -533,18 +536,21 @@ def start(today_date):
                 total_price += current_price * buy_qty
                 strategy.realized_pl_pct = 0
                 strategy.cost_price = total_price / next_max_position_sell
-                print(f"BUY | {buy_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f}")
+                strategy.trade_qty = buy_qty * lot_size
+                print(f"BUY | {strategy.trade_qty} {SYMBOL} | Cost: {strategy.cost_price:.2f}")
             elif action == 'SELL':
                 next_max_cash_buy = strategy.max_cash_buy + sell_qty
                 next_max_position_sell = strategy.max_position_sell - sell_qty
+                strategy.trade_qty = sell_qty * lot_size
 
                 # compute_pl
                 strategy.realized_pl_pct = strategy.compute_pl(current_price)
                 # cost price not updated, but not logged
-                print(f"SELL | {sell_qty*lot_size} {SYMBOL} | Cost: {strategy.cost_price:.2f} | Profit: {strategy.realized_pl_pct:.2f}")
+                print(f"SELL | {strategy.trade_qty} {SYMBOL} | Cost: {strategy.cost_price:.2f} | Profit: {strategy.realized_pl_pct:.2f}")
             elif action == 'HOLD':
                 next_max_cash_buy = strategy.max_cash_buy
                 next_max_position_sell = strategy.max_position_sell
+                strategy.trade_qty = 0
                 strategy.realized_pl_pct = 0
                 # cost price remain the same
 
@@ -561,7 +567,7 @@ def start(today_date):
             strategy.max_cash_buy = next_max_cash_buy
             strategy.max_position_sell = next_max_position_sell
 
-    return strategy, quote_ctx, trade_ctx, lot_size
+    return strategy, quote_ctx, trade_ctx
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description='Run the trading bot in live or test mode.')
@@ -575,7 +581,7 @@ if __name__ == "__main__":
         today_date = pd.to_datetime(str(args.date) + ' 23:59:00')
     
     try:
-        strategy, quote_ctx, trade_ctx, lot_size = start(today_date)
+        strategy, quote_ctx, trade_ctx = start(today_date)
     except KeyboardInterrupt:
         print("Stopped by user.")
     finally:
@@ -591,6 +597,6 @@ if __name__ == "__main__":
             print(output_path)
             output_df.to_csv(output_path)
 
-            compute_daily_pl(today_date, output_df, file_name, price, lot_size)
+            compute_daily_pl(today_date, output_df, file_name, price)
             quote_ctx.close()
             trade_ctx.close()
