@@ -120,7 +120,7 @@ class MovingAverageStrategy:
         
         # buy ratio 0 < x < 1
         trend_strength = self.macd - self.macd_signal
-        buy_ratio = max(0, min(0.9, trend_strength/0.005))
+        buy_ratio = max(0, min(0.7, trend_strength/0.005))
         if self.max_cash_buy > 0:
             buy_qty = int(self.max_cash_buy * buy_ratio)
         else:
