@@ -9,8 +9,8 @@ from pandas.tseries.offsets import BDay
 
 # ================= CONFIG =================
 # SYMBOL = "HK.00068"
-SYMBOL = "HK.00700"
-# SYMBOL = "US.AAPL"
+# SYMBOL = "HK.00700"
+SYMBOL = "US.AAPL"
 RSI_threshold_follow = 55
 RSI_threshold_revert = 35
 RSI_PERIOD = 14
@@ -465,7 +465,7 @@ def start(today_date):
             # before market open → use last completed trading day
             end_date = (today_date - BDay(2)).strftime('%Y-%m-%d')
         else:
-            end_date = (today_date - BDay(1)).strftime('%Y-%m-%d')
+            end_date = (today_date - BDay(2)).strftime('%Y-%m-%d')
     
     initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_size)
 
@@ -484,9 +484,9 @@ def start(today_date):
             ret, df_state = quote_ctx.get_global_state()
             if ret != RET_OK:
                 print(f"[QUOTE] get_global_state failed, ret={df_state}")
-            if df_state[market] == 'CLOSED':
+            if df_state[market] not in ['MORNING', 'AFTERNOON']:
                 print("LOOP EXITED: Market closed")
-                return strategy, quote_ctx, trade_ctx, lot_size
+                return strategy, quote_ctx, trade_ctx
             time.sleep(1)
     else:
         ret, df_current, _ = quote_ctx.request_history_kline(
@@ -496,9 +496,13 @@ def start(today_date):
             SubType.K_1M, 
             AuType.NONE
         )
-
+        
+        if SYMBOL.startswith("HK."):
+            trend_code = "HK.800000" 
+        else:
+            trend_code ="US.SPY"
         ret2, df_HSI, _ = quote_ctx.request_history_kline(
-                "HK.800000",
+                trend_code,
                 (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
                 (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
                 SubType.K_1M, 
@@ -575,10 +579,16 @@ if __name__ == "__main__":
     argparser.add_argument('--date', default=pd.Timestamp.today(), help='Current date, or previous date for backtesting')
     args = argparser.parse_args()
     live_mode = args.live
+
+    if SYMBOL.startswith("HK."):
+        timezone_date = pd.to_datetime(args.date).tz_localize("Asia/Hong_Kong")
+    elif SYMBOL.startswith("US."):
+        timezone_date = pd.to_datetime(args.date).tz_localize("America/New_York")
+
     if live_mode:
-        today_date = args.date
+        today_date = timezone_date
     else:
-        today_date = pd.to_datetime(str(args.date) + ' 23:59:00')
+        today_date = pd.to_datetime(str(timezone_date) + ' 23:59:00')
     
     try:
         strategy, quote_ctx, trade_ctx = start(today_date)
@@ -587,6 +597,7 @@ if __name__ == "__main__":
     finally:
         if len(strategy.output):
             output_df = pd.DataFrame(strategy.output)
+            output_df['time_SG'] = pd.to_datetime(output_df['time']).dt.tz_localize('America/New_York').dt.tz_convert('Asia/Singapore')
             if live_mode:
                 file_name = 'live_trading_logs.csv'
                 price = 'execution_price'
