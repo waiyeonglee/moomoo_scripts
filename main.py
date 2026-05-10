@@ -484,7 +484,7 @@ def start(today_date):
             ret, df_state = quote_ctx.get_global_state()
             if ret != RET_OK:
                 print(f"[QUOTE] get_global_state failed, ret={df_state}")
-            if df_state[market] not in ['MORNING', 'AFTERNOON']:
+            if df_state[market] in ['AFTER_HOURS_BEGIN', 'CLOSED']:
                 print("LOOP EXITED: Market closed")
                 return strategy, quote_ctx, trade_ctx
             time.sleep(1)
