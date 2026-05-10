@@ -1,11 +1,10 @@
-import copy
 from pathlib import Path
-import warnings
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
 import numpy as np
 import pandas as pd
+import os
 import torch
 from pytorch_forecasting import Baseline, TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.data import GroupNormalizer
@@ -13,16 +12,44 @@ from pytorch_forecasting.metrics import MAE, SMAPE, PoissonLoss, QuantileLoss
 from pytorch_forecasting.models.temporal_fusion_transformer.tuning import optimize_hyperparameters
 import tensorflow as tf
 import tensorboard as tb
-tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
-    
-data = pd.read_csv("data_from_2019-09-11_to_2019-09-18.csv")
+from moomoo import *
+from pandas.tseries.offsets import BDay
+# tf.io.gfile = tb.compat.tensorflow_stubs.io.gfile
+
+SYMBOL = "US.AAPL"
+if SYMBOL.startswith("HK."):
+    trade_market = TrdMarket.HK
+    market = 'market_hk'
+elif SYMBOL.startswith("US."):
+    trade_market = TrdMarket.US
+    market = 'market_us'
+quote_ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+trade_ctx = OpenSecTradeContext(
+        filter_trdmarket=trade_market,
+        host="127.0.0.1",
+        port=11111,
+        security_firm=SecurityFirm.FUTUSG
+)
+prev_date = pd.to_datetime("2025-01-01").strftime('%Y-%m-%d')
+end_date = pd.Timestamp.today().strftime('%Y-%m-%d')
+ret, data, _ = quote_ctx.request_history_kline(
+    SYMBOL,
+    prev_date,
+    end_date,
+    SubType.K_DAY, 
+    AuType.NONE
+)
+
+# historical_data = os.path.join(os.getcwd(), "data_from_2019-09-11_to_2019-09-18.csv")
+# data = pd.read_csv(historical_df)
 # add time index
-date = data["time_key"].date()
-data["time_idx"] = (date - date.min()).dt.days
+date = pd.to_datetime(data["time_key"]).dt.normalize()
+data["time_idx"] = date.rank(method="dense").astype(int) - 1
 
 # add additional features
-data["month"] = data.dt.month.astype(str).astype("category")  # categories have be strings
+data["month"] = date.dt.month.astype(str).astype("category")  # categories have be strings
 
+data.to_csv("stock_data.csv", index=False)
 max_prediction_length = 7
 max_encoder_length = 21
 training_cutoff = data["time_idx"].max() - max_prediction_length
@@ -93,7 +120,7 @@ tft = TemporalFusionTransformer.from_dataset(
     hidden_continuous_size=8,
     loss=QuantileLoss(),
     log_interval=10,  # uncomment for learning rate finder and otherwise, e.g. to 10 for logging every 10 batches
-    optimizer="Ranger",
+    optimizer="Adam",
     reduce_on_plateau_patience=4,
 )
 print(f"Number of parameters in network: {tft.size()/1e3:.1f}k")
@@ -107,6 +134,8 @@ trainer.fit(
 best_model_path = trainer.checkpoint_callback.best_model_path
 best_tft = TemporalFusionTransformer.load_from_checkpoint(best_model_path)
 predictions = best_tft.predict(val_dataloader, return_y=True, trainer_kwargs=dict(accelerator="cpu"))
-MAE()(predictions.output, predictions.y)
-for idx in range(10):  # plot 10 examples
-    best_tft.plot_prediction(predictions.x, predictions.output, idx=idx, add_loss_to_title=True)
+print(MAE()(predictions.output, predictions.y))
+
+# raw predictions are a dictionary from which all kind of information including quantiles can be extracted
+raw_predictions = best_tft.predict(val_dataloader, mode="raw", return_x=True)
+best_tft.plot_prediction(raw_predictions.x, raw_predictions.output, idx=0, add_loss_to_title=True)
