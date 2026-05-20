@@ -2,13 +2,14 @@ import time
 import os
 import argparse
 import talib
+import re
 import pandas as pd
 import numpy as np
 from moomoo import *
 from pandas.tseries.offsets import BDay
+from pathlib import Path
 
 # ================= CONFIG =================
-# SYMBOL = "HK.00068"
 # SYMBOL = "HK.00700"
 SYMBOL = "US.AAPL"
 RSI_threshold_follow = 55
@@ -250,21 +251,54 @@ def get_available_qty(trade_ctx, current_price, lot_size):
 
     return max_cash_buy, max_position_sell
 
-def initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_size):
+def initialize_rows(strategy, trade_ctx, quote_ctx, today_date, lot_size):
     
-    ret, historical_df, _ = quote_ctx.request_history_kline(
+    prev_date = (today_date - BDay(5)).strftime('%Y-%m-%d')
+    end_date = today_date.strftime('%Y-%m-%d')
+
+    full_df = []
+    ret, historical_df, page_req_key = quote_ctx.request_history_kline(
         SYMBOL,
         prev_date,
         end_date,
         SubType.K_1M, 
         AuType.NONE
     )
-    if ret != RET_OK:
-        print("Error fetching historical data:", historical_df)
-        return 0
+    full_df.append(historical_df)
+    while page_req_key != None: # Request all results after
+        ret, historical_df, page_req_key = quote_ctx.request_history_kline(
+        SYMBOL,
+        prev_date,
+        end_date,
+        SubType.K_1M, 
+        AuType.NONE,
+        page_req_key=page_req_key
+    )
+        if ret != RET_OK:
+            print("Error fetching historical data:", historical_df)
+        full_df.append(historical_df)
+
+    full_historical_df = pd.concat(full_df, ignore_index=True)
+    full_historical_df["time_key"] = pd.to_datetime(full_historical_df["time_key"])
+    full_historical_df["date"] = full_historical_df["time_key"].dt.date
 
     # Intialize first window_length-1 candles to fill the strategy state
-    df_past = historical_df.iloc[-window_length+1:]
+    if live_mode:
+        df_past = full_historical_df.iloc[-window_length+1:].copy()
+        df_current = None
+        last_day = None
+    else:
+        # get last 2 full trading days
+        counts = full_historical_df.groupby("date").size()
+        full_days = counts[counts >= 390].index.sort_values()
+        # second last FULL day
+        second_last_day = full_days[-2]   
+        prev_day_df = full_historical_df[full_historical_df["date"] == second_last_day]
+        df_past = prev_day_df.iloc[-window_length+1:].copy()
+        # last FULL day
+        last_day = full_days[-1]
+        df_current = full_historical_df[full_historical_df["date"] == last_day].copy()
+
     for i in range(len(df_past)):
         
         row = df_past.iloc[i]
@@ -295,24 +329,99 @@ def initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_siz
         strategy.save_output(row, action, order_data=None)
 
     print("Initialized time: ", df_past['time_key'].iloc[-1])
-    return None
+    return df_current, last_day
 
 def compute_daily_pl(today_date, output_df, file_name, price):
     output_filename = file_name.split('_')[0]
 
-    buy_df = output_df.loc[output_df['action'] == 'BUY']
-    initial_capital = (buy_df[price] * buy_df['trade_qty']).max()
-    print(f"Initial Capital: {initial_capital:.0f}")
-    sell_df = output_df.loc[output_df['action'] == 'SELL']
+    sell_df = output_df.loc[output_df['action'] == 'SELL'].copy()
+
+    exposure = 0
+    peak_exposure = 0
+
+    for _, row in output_df.iterrows():
+
+        if row["action"] == "BUY":
+            exposure += (row[price] * row['trade_qty'])
+
+        elif row["action"] == "SELL":
+            exposure -= (row[price] * row['trade_qty'])
+
+        # track peak capital used
+        peak_exposure = max(peak_exposure, exposure)
+    print(f"Peak Exposure: {peak_exposure:.0f}")
+    
     sell_df['realized_pl'] = (sell_df[price] - sell_df['cost_price']) * sell_df['trade_qty']
-    if initial_capital > 0:
-        total_pct = sell_df['realized_pl'].sum()/initial_capital * 100
+    realized_pl_sum = sell_df['realized_pl'].sum()
+    if peak_exposure > 0:
+        realized_pl = realized_pl_sum/peak_exposure * 100
     else:
-        total_pct = 0
-        
-    print(f"Total Return: {sell_df['realized_pl'].sum():.0f}, {total_pct:.3f}%")
+        realized_pl = 0
+
+    print(f"Total Return: {realized_pl_sum:.0f}, {realized_pl:.3f}%")
     output_path = os.path.join(os.getcwd(), 'logs', f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - pl_{output_filename}.csv")
     sell_df.to_csv(output_path)
+
+    return realized_pl_sum, peak_exposure, realized_pl
+
+def get_daily_status(trade_ctx, realized_pl_sum, peak_exposure, realized_pl, logs_folder, daily_status_file_name):
+    ret, acc = trade_ctx.accinfo_query(trd_env=trade_env)
+
+    if ret != RET_OK:
+        print("Error fetching account info:", acc)
+        return None
+
+    total_assets = acc.loc[0, 'total_assets']
+
+    ret, positions = trade_ctx.position_list_query(trd_env=trade_env)
+
+    if ret != RET_OK:
+        print("Error fetching positions:", positions)
+
+        return pd.DataFrame({
+            "total_assets": [total_assets]
+        })
+
+    # Select relevant columns
+    df = positions[[
+        'code',
+        'qty',
+        'nominal_price',
+        'cost_price',
+        'market_val',
+        'unrealized_pl',
+        'realized_pl',
+        'pl_ratio'
+    ]].loc[positions['qty'] > 0].copy()
+
+    # Add account-level info
+    df['total_assets'] = total_assets
+    df['realized_pl_sum'] = realized_pl_sum
+    df['realized_pl'] = realized_pl
+    df['peak_exposure'] = peak_exposure
+
+    files = list(Path(logs_folder).glob(f"*{daily_status_file_name}.csv"))
+
+    prev_df = None
+
+    if files:
+
+        def extract_date(f):
+            match = re.search(r"\d{4}-\d{2}-\d{2}", f.name)
+            return pd.to_datetime(match.group()) if match else pd.Timestamp.min
+
+        prev_file = max(files, key=extract_date)
+
+        file_date = extract_date(prev_file).date()
+
+        if file_date != pd.Timestamp(today_date).date():
+            prev_df = pd.read_csv(prev_file)
+
+    if prev_df is not None:
+        df = pd.concat([prev_df, df], ignore_index=True)
+    
+        print(prev_df)
+    return df
 # ============================================================
 # QUOTE CALLBACK
 # ============================================================
@@ -353,7 +462,11 @@ class KlineHandler(CurKlineHandlerBase):
             self.strategy.max_cash_buy, self.strategy.max_position_sell = get_available_qty(self.trade_ctx, current_price, self.lot_size)
             
             # get trend signal
-            ret, data = self.quote_ctx.get_market_snapshot(['HK.800000'])
+            if SYMBOL.startswith("HK."):
+                trend_code = "HK.800000" 
+            else:
+                trend_code ="US.SPY"
+            ret, data = self.quote_ctx.get_market_snapshot([trend_code])
             self.strategy.market_trend = data['last_price'].iloc[0] - data['prev_close_price'].iloc[0]
             # Decide action
             action, buy_qty, sell_qty = self.strategy.buy_or_sell(self.strategy.unrealized_pl_pct)
@@ -456,18 +569,8 @@ def start(today_date):
     )
     lot_size = stock_data['lot_size'].iloc[0]
 
-    # Intialize first LONG_WINDOW-1 rows to fill the strategy state
-    prev_date = (today_date - BDay(3)).strftime('%Y-%m-%d')
-    if live_mode:
-        end_date = today_date.strftime('%Y-%m-%d')
-    else:
-        if today_date.time() < pd.Timestamp("09:30").time():
-            # before market open → use last completed trading day
-            end_date = (today_date - BDay(2)).strftime('%Y-%m-%d')
-        else:
-            end_date = (today_date - BDay(2)).strftime('%Y-%m-%d')
-    
-    initialize_rows(strategy, trade_ctx, quote_ctx, prev_date, end_date, lot_size)
+    # df_current and last_day only used for backtesting, not live mode
+    df_current, last_day = initialize_rows(strategy, trade_ctx, quote_ctx, today_date, lot_size)
 
     if live_mode:    
         trade_ctx.set_handler(OrderHandler(strategy, trade_ctx, lot_size))
@@ -489,13 +592,6 @@ def start(today_date):
                 return strategy, quote_ctx, trade_ctx
             time.sleep(1)
     else:
-        ret, df_current, _ = quote_ctx.request_history_kline(
-            SYMBOL,
-            (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
-            (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
-            SubType.K_1M, 
-            AuType.NONE
-        )
         
         if SYMBOL.startswith("HK."):
             trend_code = "HK.800000" 
@@ -503,12 +599,12 @@ def start(today_date):
             trend_code ="US.SPY"
         ret2, df_HSI, _ = quote_ctx.request_history_kline(
                 trend_code,
-                (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
-                (pd.to_datetime(end_date) + BDay(1)).strftime('%Y-%m-%d'),
+                last_day.strftime('%Y-%m-%d'),
+                last_day.strftime('%Y-%m-%d'),
                 SubType.K_1M, 
                 AuType.NONE
             )
-        
+        df_HSI["time_key"] = pd.to_datetime(df_HSI["time_key"])
         total_price = strategy.cost_price * strategy.max_position_sell
         for _, row in df_current.iterrows():
             strategy.update_state_from_row(row, init=False)
@@ -600,14 +696,22 @@ if __name__ == "__main__":
             output_df['time_SG'] = pd.to_datetime(output_df['time']).dt.tz_localize('America/New_York').dt.tz_convert('Asia/Singapore')
             if live_mode:
                 file_name = 'live_trading_logs.csv'
+                daily_status_file_name = 'live_daily_status.csv'
                 price = 'execution_price'
             else:
                 file_name = 'simulated_trading_logs.csv'
+                daily_status_file_name = 'simulated_daily_status.csv'
                 price = 'close'
-            output_path = os.path.join(os.getcwd(), 'logs', f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {file_name}")
+            logs_folder = os.path.join(os.getcwd(), 'logs')
+            output_path = os.path.join(logs_folder, f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {file_name}")
             print(output_path)
             output_df.to_csv(output_path)
 
-            compute_daily_pl(today_date, output_df, file_name, price)
+            realized_pl_sum, peak_exposure, realized_pl = compute_daily_pl(today_date, output_df, file_name, price)
+            daily_status = get_daily_status(trade_ctx, realized_pl_sum, peak_exposure, realized_pl, logs_folder, daily_status_file_name)
+            daily_status_path = os.path.join(logs_folder, f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {daily_status_file_name}")
+            print(daily_status_path)
+            daily_status.to_csv(daily_status_path)
+
             quote_ctx.close()
             trade_ctx.close()
