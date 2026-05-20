@@ -1,4 +1,5 @@
-# Portfolio Analytics Engine (Python)
+# Automated Trading Analytics & Portfolio Monitoring System
+
 
 A Python-based portfolio analytics system that integrates with broker APIs to track real-time positions, compute profit & loss (realized and unrealized), and support both live trading and backtesting workflows.
 
