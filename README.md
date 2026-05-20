@@ -10,9 +10,17 @@ git clone https://github.com/waiyeonglee/portfolio-analytics-engine.git
 cd portfolio-analytics-engine
 
 pip install -r requirements.txt
+```
 
-1. For Live mode, run python main.py --live
-2. For Backtesting mode, run python main.py
+Run the system:
+Live mode:
+```bash
+python main.py --live
+```
+
+Backtesting mode
+```bash
+python main.py
 ```
 
 ## 🚀 Key Features
