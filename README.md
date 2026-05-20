@@ -12,13 +12,12 @@ cd portfolio-analytics-engine
 pip install -r requirements.txt
 ```
 
-Run the system:
 Live mode:
 ```bash
 python main.py --live
 ```
 
-Backtesting mode
+Backtesting mode:
 ```bash
 python main.py
 ```
