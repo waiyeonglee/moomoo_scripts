@@ -1,96 +1,101 @@
 # Automated Trading Analytics & Portfolio Monitoring System
 
-
-A Python-based portfolio analytics system that integrates with broker APIs to track real-time positions, compute profit & loss (realized and unrealized), and support both live trading and backtesting workflows.
+A Python-based portfolio analytics engine that integrates with broker APIs to compute real-time and historical portfolio performance, including realized and unrealized P/L. The system supports both live trading and backtesting with a unified portfolio state model.
 
 ---
 
-## 🚀 Features
+## 🚀 Key Features
 
 - Real-time portfolio tracking via broker API integration  
-- Automated computation of realized and unrealized P/L  
-- Session-aware data handling for market trading days  
-- Unified logic for both live trading and backtesting modes  
-- Robust handling of inconsistent and fragmented position data  
-- Daily logging and portfolio state persistence  
+- Unified computation of realized and unrealized P/L  
+- Session-aware market data handling (full-day vs partial-day logic)  
+- Live trading and backtesting using the same core analytics engine  
+- Persistent daily logging of portfolio state for auditing and debugging  
+- Robust handling of duplicate and fragmented position records from broker APIs  
 
 ---
 
-## 🧠 System Overview
+## 🧠 Core Design
 
-This project builds a portfolio state engine that reconstructs and tracks trading performance across time.
+This project is built around a **portfolio state engine** that reconstructs and maintains accurate account performance over time.
 
-It ensures consistency between:
-- Live trading environment (real-time updates)
-- Backtesting environment (historical replay)
+It ensures:
 
-Key focus areas:
-- Accurate P/L computation
-- Clean portfolio state management
-- Reliable handling of broker API data inconsistencies
+- Consistent P/L computation across time  
+- Clean separation between open positions and closed trades  
+- Reliable handling of incomplete or inconsistent broker data  
+- Reproducibility between live trading and backtest environments  
 
 ---
 
-## 📊 Core Components
+## 🏗 System Architecture
 
-### 1. Data Ingestion
-Fetches account and position data from broker APIs.
+**Data Flow:**
 
-### 2. Portfolio Engine
-Processes:
-- Position aggregation
-- Unrealized P/L computation
-- Realized P/L tracking
+Broker API → Data Ingestion → Position Normalization → P/L Engine → Daily Snapshot Logs
 
-### 3. Session Management
-Ensures correct handling of trading days and prevents mixing partial sessions.
+**Main Components:**
 
-### 4. Logging Layer
-Stores daily portfolio snapshots for tracking and debugging.
+- **Data Layer**: Fetches account + position data from broker API  
+- **Normalization Layer**: Cleans duplicate / fragmented position rows  
+- **Analytics Engine**: Computes realized & unrealized P/L  
+- **Session Manager**: Ensures correct trading-day boundaries  
+- **Logging Layer**: Stores daily portfolio snapshots  
 
 ---
 
-## 🛠 Tech Stack
+## 📊 Outputs
 
-- Python
-- Pandas
-- Broker API (Moomoo/Futu OpenAPI)
-- Date/Time utilities for session handling
+The engine generates:
 
----
-
-## 📈 Example Output
-
-- Total Assets
-- Position-level breakdown
-- Realized P/L
-- Unrealized P/L
-- Portfolio exposure tracking
+- Total account value  
+- Position-level breakdown  
+- Realized P/L (daily + cumulative)  
+- Unrealized P/L  
+- Exposure tracking  
+- Daily portfolio snapshots for historical analysis  
 
 ---
 
-## 📌 Key Design Goals
+## 🔁 Live vs Backtest Mode
 
-- Consistency between live and backtest environments  
-- Accurate financial calculations across trading sessions  
-- Resilience against incomplete or duplicated API data  
-- Simple and extensible architecture for future strategy integration  
+- **Live Mode**: Processes real-time broker data continuously  
+- **Backtest Mode**: Reconstructs portfolio state from historical sessions  
 
----
-
-## ⚠️ Notes
-
-- Designed for single-stock and multi-position portfolio tracking  
-- Assumes regular trading sessions for session segmentation logic  
-- API responses may contain duplicate or fragmented position rows, which are normalized internally  
+Both modes share the same computation logic to ensure consistency.
 
 ---
 
-## 🔧 Future Improvements
+## ⚙️ Tech Stack
 
-- Strategy module integration (signals, indicators)  
-- Visualization dashboard for portfolio performance  
-- Trade-level analytics (win rate, Sharpe ratio, drawdown)  
+- Python  
+- Pandas  
+- Broker API (Moomoo / Futu OpenAPI)  
+- NumPy (light usage for calculations)  
+- Local file-based logging system (CSV snapshots)  
+
+---
+
+## 📌 Key Engineering Challenges Solved
+
+- Handling inconsistent broker position structures  
+- Preventing double counting of P/L from duplicated rows  
+- Correctly segmenting trading sessions across days  
+- Aligning live trading logic with historical backtesting  
+- Building a reliable portfolio state reconstruction system  
+
+---
+
+## 📈 Future Improvements
+
+- Strategy module (signal-based trading logic)  
+- Performance metrics (Sharpe ratio, drawdown, win rate)  
+- Visualization dashboard for portfolio analytics  
 - Multi-asset portfolio support  
+- Database-backed storage instead of CSV logs  
 
 ---
+
+## 📄 License
+
+MIT License
