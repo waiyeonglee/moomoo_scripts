@@ -703,13 +703,13 @@ if __name__ == "__main__":
                 daily_status_file_name = 'simulated_daily_status.csv'
                 price = 'close'
             logs_folder = os.path.join(os.getcwd(), 'logs')
-            output_path = os.path.join(logs_folder, f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {file_name}")
+            output_path = os.path.join(logs_folder, f"{pd.Timestamp.today().strftime('%Y-%m-%d %H:%M:%S')} - {file_name}")
             print(output_path)
             output_df.to_csv(output_path)
 
-            realized_pl_sum, peak_exposure, realized_pl = compute_daily_pl(today_date, output_df, file_name, price)
+            realized_pl_sum, peak_exposure, realized_pl = compute_daily_pl(pd.Timestamp.today(), output_df, file_name, price)
             daily_status = get_daily_status(trade_ctx, realized_pl_sum, peak_exposure, realized_pl, logs_folder, daily_status_file_name)
-            daily_status_path = os.path.join(logs_folder, f"{today_date.strftime('%Y-%m-%d %H:%M:%S')} - {daily_status_file_name}")
+            daily_status_path = os.path.join(logs_folder, f"{pd.Timestamp.today().strftime('%Y-%m-%d %H:%M:%S')} - {daily_status_file_name}")
             print(daily_status_path)
             daily_status.to_csv(daily_status_path)
 
