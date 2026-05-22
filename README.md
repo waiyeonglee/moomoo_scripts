@@ -3,6 +3,24 @@
 A Python-based portfolio analytics engine that integrates with broker APIs to compute real-time and historical portfolio performance, including realized and unrealized P/L. The system supports both live trading and backtesting with a unified portfolio state model.
 
 ---
+## ⚙️ How to Run
+
+```bash
+git clone https://github.com/waiyeonglee/portfolio-analytics-engine.git
+cd portfolio-analytics-engine
+
+pip install -r requirements.txt
+```
+
+Live mode:
+```bash
+python main.py --live
+```
+
+Backtesting mode:
+```bash
+python main.py
+```
 
 ## 🚀 Key Features
 
