@@ -365,25 +365,13 @@ def compute_daily_pl(today_date, output_df, file_name, price):
     return realized_pl_sum, peak_exposure, realized_pl
 
 def get_daily_status(trade_ctx, realized_pl_sum, peak_exposure, realized_pl, logs_folder, daily_status_file_name):
-    ret, acc = trade_ctx.accinfo_query(trd_env=trade_env)
-
-    if ret != RET_OK:
-        print("Error fetching account info:", acc)
-        return None
-
-    total_assets = acc.loc[0, 'total_assets']
-
+    # Open positions
     ret, positions = trade_ctx.position_list_query(trd_env=trade_env)
 
     if ret != RET_OK:
         print("Error fetching positions:", positions)
 
-        return pd.DataFrame({
-            "total_assets": [total_assets]
-        })
-
-    # Select relevant columns
-    df = positions[[
+    columns = [
         'code',
         'qty',
         'nominal_price',
@@ -392,9 +380,30 @@ def get_daily_status(trade_ctx, realized_pl_sum, peak_exposure, realized_pl, log
         'unrealized_pl',
         'realized_pl',
         'pl_ratio'
-    ]].loc[positions['qty'] > 0].copy()
+    ]
 
-    # Add account-level info
+    if positions.empty or (positions['qty'] > 0).sum() == 0:
+        df = pd.DataFrame([{
+            'code': SYMBOL,
+            'qty': 0,
+            'nominal_price': 0,
+            'cost_price': 0,
+            'market_val': 0,
+            'unrealized_pl': 0,
+            'realized_pl': 0,
+            'pl_ratio': 0
+        }])
+    else:
+        df = positions[columns].loc[positions['qty'] > 0].copy()
+    
+    # Total assets
+    ret, acc = trade_ctx.accinfo_query(trd_env=trade_env)
+
+    if ret != RET_OK:
+        print("Error fetching account info:", acc)
+
+    total_assets = acc.loc[0, 'total_assets']
+
     df['total_assets'] = total_assets
     df['realized_pl_sum'] = realized_pl_sum
     df['realized_pl'] = realized_pl
